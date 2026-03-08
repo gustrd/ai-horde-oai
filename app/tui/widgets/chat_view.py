@@ -4,8 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from textual.app import ComposeResult
-from textual.widget import Widget
+from textual.containers import ScrollableContainer
 from textual.widgets import Markdown
 
 
@@ -16,12 +15,11 @@ class ChatMessage:
     metadata: dict = field(default_factory=dict)
 
 
-class ChatView(Widget):
+class ChatView(ScrollableContainer):
     """Scrollable chat history display."""
 
     DEFAULT_CSS = """
     ChatView {
-        overflow-y: auto;
         padding: 1;
     }
     ChatView .user-msg {
@@ -41,9 +39,6 @@ class ChatView(Widget):
         text-style: italic;
     }
     """
-
-    def compose(self) -> ComposeResult:
-        yield from []
 
     def clear(self) -> None:
         self.remove_children()

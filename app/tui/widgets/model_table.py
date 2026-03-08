@@ -38,7 +38,7 @@ class ModelTable(Widget):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Status", "Name", "Context", "Max Len")
+        table.add_columns("Workers", "Name", "Max Ctx", "Max Tok", "Queued", "ETA")
         self._render_table()
         table.focus()
 
@@ -50,9 +50,16 @@ class ModelTable(Widget):
     def _render_table(self) -> None:
         table = self.query_one(DataTable)
         table.clear()
-        for i, m in enumerate(self._displayed):
+        for m in self._displayed:
+            eta_str = f"{m.eta}s" if m.eta else "-"
             table.add_row(
-                "✓", m.name, str(m.max_context_length), str(m.max_length), key=m.name
+                str(m.count),
+                m.name,
+                str(m.max_context_length),
+                str(m.max_length),
+                str(m.queued),
+                eta_str,
+                key=m.name,
             )
 
     def set_models(self, models: list[HordeModel]) -> None:

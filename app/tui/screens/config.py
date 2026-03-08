@@ -165,4 +165,6 @@ class ConfigScreen(Screen):
         )
         save_config(new_config)
         self.app.config = new_config
-        self.query_one("#status", Label).update("✓ Config saved.")
+        self.query_one("#status", Label).update(
+            "✓ Config saved. Restart the server for API key / URL changes to take effect."
+        )

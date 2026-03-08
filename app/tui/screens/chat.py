@@ -1,7 +1,9 @@
 """Test chat screen."""
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -166,58 +168,115 @@ class ChatScreen(Screen):
         for msg in self._history:
             messages.append({"role": msg.role, "content": msg.content})
 
+        STALE_TIMEOUT = 30.0  # seconds without any SSE line before giving up
+
         start = time.monotonic()
+        connect_host = "127.0.0.1" if cfg.host == "0.0.0.0" else cfg.host
+        status_code = 0
+        content_parts: list[str] = []
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.post(
-                    f"http://{cfg.host}:{cfg.port}/v1/chat/completions",
-                    json={"model": model, "messages": messages},
-                )
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None)) as client:
+                async with client.stream(
+                    "POST",
+                    f"http://{connect_host}:{cfg.port}/v1/chat/completions",
+                    json={"model": model, "messages": messages, "stream": True},
+                ) as r:
+                    status_code = r.status_code
+                    if r.status_code != 200:
+                        body = await r.aread()
+                        self.query_one("#status", Label).update(
+                            f"Error: HTTP {r.status_code} — {body.decode()[:120]}"
+                        )
+                        return
+
+                    first_pos: int | None = None
+                    first_pos_time: float = 0.0
+                    aiter = r.aiter_lines().__aiter__()
+                    while True:
+                        try:
+                            line = await asyncio.wait_for(aiter.__anext__(), timeout=STALE_TIMEOUT)
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            elapsed_s = time.monotonic() - start
+                            raise TimeoutError(
+                                f"No update from server for {STALE_TIMEOUT:.0f}s "
+                                f"(total elapsed: {elapsed_s:.0f}s)"
+                            )
+
+                        if line.startswith(": queue_position="):
+                            m = re.search(r"queue_position=(\d+).*eta=(\d+)", line)
+                            if m:
+                                pos = int(m.group(1))
+                                horde_eta = int(m.group(2))
+                                elapsed_s = time.monotonic() - start
+                                if horde_eta > 0:
+                                    eta_str = f"eta={horde_eta}s"
+                                elif first_pos is not None and pos < first_pos:
+                                    elapsed_since = time.monotonic() - first_pos_time
+                                    rate = (first_pos - pos) / elapsed_since
+                                    eta_est = int(pos / rate) if rate > 0 else 0
+                                    eta_str = f"eta~{eta_est}s"
+                                else:
+                                    eta_str = "eta=?"
+                                if first_pos is None:
+                                    first_pos = pos
+                                    first_pos_time = time.monotonic()
+                                self.query_one("#status", Label).update(
+                                    f"Queued — pos={pos}, {eta_str}, elapsed={elapsed_s:.0f}s"
+                                )
+                            else:
+                                self.query_one("#status", Label).update(f"Queued — {line[2:]}")
+                        elif line.startswith("data: ") and line != "data: [DONE]":
+                            chunk = line[6:]
+                            try:
+                                delta = json.loads(chunk)
+                                text = (
+                                    delta.get("choices", [{}])[0]
+                                    .get("delta", {})
+                                    .get("content") or ""
+                                )
+                                if text:
+                                    content_parts.append(text)
+                                    self.query_one("#status", Label).update("Receiving…")
+                            except Exception:
+                                pass
+
             elapsed = time.monotonic() - start
-            
-            # Log the request
+            content = "".join(content_parts)
+            if content:
+                reply = ChatMessage(
+                    role="assistant",
+                    content=content,
+                    metadata={"elapsed": elapsed},
+                )
+                self._history.append(reply)
+                self.query_one(ChatView).add_message(reply)
+                self.query_one("#status", Label).update(f"Done — {elapsed:.1f}s")
+                self._save_history(model, 0)
+            else:
+                self.query_one("#status", Label).update("Error: empty response")
+
+        except Exception as e:
+            msg = str(e) or type(e).__name__
+            self.query_one("#status", Label).update(f"Error: {msg}")
+
+        finally:
             entry = RequestLogEntry(
                 timestamp=datetime.now(),
                 method="POST",
                 path="/v1/chat/completions",
-                status=r.status_code,
-                duration=elapsed
+                status=status_code,
+                duration=time.monotonic() - start,
             )
             self.app.request_log.append(entry)
-            # If we're on the logs screen, it'll pick it up on next mount,
-            # but we should ideally notify it if it's active.
             try:
-                logs_screen = self.app.get_screen("logs")
                 from app.tui.screens.logs import LogsScreen
+                logs_screen = self.app.get_screen("logs")
                 if isinstance(logs_screen, LogsScreen):
                     logs_screen.add_entry(entry)
             except Exception:
                 pass
-
-            if r.status_code != 200:
-                self.query_one("#status", Label).update(f"Error: HTTP {r.status_code}")
-                return
-
-            data = r.json()
-            content = data["choices"][0]["message"]["content"]
-            tokens = data.get("usage", {}).get("total_tokens", 0)
-
-            reply = ChatMessage(
-                role="assistant",
-                content=content,
-                metadata={"elapsed": elapsed, "tokens": tokens},
-            )
-            self._history.append(reply)
-            self.query_one(ChatView).add_message(reply)
-            self.query_one("#status", Label).update(
-                f"Done — {elapsed:.1f}s · {tokens} tokens"
-            )
-            
-            # Save to history
-            self._save_history(model, tokens)
-            
-        except Exception as e:
-            self.query_one("#status", Label).update(f"Error: {e}")
 
     def _save_history(self, model: str, tokens: int) -> None:
         history_dir = Path.home() / ".ai-horde-oai" / "history"
