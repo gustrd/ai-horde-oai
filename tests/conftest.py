@@ -68,6 +68,18 @@ def app(test_config, mock_horde):
 
 @pytest.fixture
 async def client(app):
+    from app.horde.client import HordeClient
+    from app.horde.routing import ModelRouter
+
+    config = app.state.config
+    horde = HordeClient(
+        base_url=config.horde_api_url,
+        api_key=config.horde_api_key,
+        client_agent=config.client_agent,
+    )
+    app.state.horde = horde
+    app.state.model_router = ModelRouter(config)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+    await horde.close()

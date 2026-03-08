@@ -44,9 +44,9 @@ def chat_to_horde(
     if config.worker_whitelist:
         horde_req.workers = config.worker_whitelist
     if config.worker_blocklist:
-        # Horde uses worker_blacklist as a list of worker IDs, not a flag
-        horde_req.model_extra = horde_req.model_extra or {}
-        horde_req.model_extra["worker_blacklist"] = config.worker_blocklist
+        # Horde: set workers list + worker_blacklist=True to treat workers as a blacklist
+        horde_req.workers = config.worker_blocklist
+        horde_req.worker_blacklist = True
 
     return horde_req
 

@@ -50,7 +50,7 @@ def test_blocklist_multiple():
 def test_min_context():
     result = filter_models(MODELS, min_context=8192)
     assert all(m.max_context_length >= 8192 for m in result)
-    assert len(result) == 2  # llama-8b and mistral-nemo
+    assert len(result) == 3  # llama-8b, mistral-nemo, and yi-34b
 
 
 def test_min_max_length():

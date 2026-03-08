@@ -7,11 +7,9 @@ from app.schemas.horde import HordeGeneration, HordeJobStatus
 
 
 def make_status(done: bool = False, generations=None, faulted: bool = False) -> HordeJobStatus:
-    return HordeJobStatus(
-        done=done,
-        faulted=faulted,
-        generations=generations or ([HordeGeneration(text="Hi", model="test")] if done else []),
-    )
+    if generations is None:
+        generations = [HordeGeneration(text="Hi", model="test")] if done else []
+    return HordeJobStatus(done=done, faulted=faulted, generations=generations)
 
 
 @pytest.mark.asyncio
