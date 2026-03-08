@@ -14,11 +14,12 @@ class DashboardScreen(Screen):
 
     TITLE = "ai-horde-oai"
     BINDINGS = [
-        ("f1", "push_screen('config')", "Config"),
-        ("f2", "push_screen('models')", "Models"),
-        ("f3", "push_screen('chat')", "Test Chat"),
-        ("f4", "push_screen('logs')", "Logs"),
-        ("f5", "push_screen('history')", "History"),
+        ("d", "switch_screen('dashboard')", "Dash"),
+        ("s", "switch_screen('config')", "Set"),
+        ("m", "switch_screen('models')", "Mod"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Log"),
+        ("h", "switch_screen('history')", "Hist"),
         ("q", "quit", "Quit"),
     ]
 
@@ -45,10 +46,10 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Static(id="status-panel"):
-            yield Label("", id="server-status", classes="stat-row")
-            yield Label("", id="api-key-status", classes="stat-row")
-            yield Label("", id="model-stats", classes="stat-row")
-            yield Label("", id="request-stats", classes="stat-row")
+            yield Label("", id="server-status", classes="stat-row", markup=False)
+            yield Label("", id="api-key-status", classes="stat-row", markup=False)
+            yield Label("", id="model-stats", classes="stat-row", markup=False)
+            yield Label("", id="request-stats", classes="stat-row", markup=False)
         yield KudosBar(id="kudos-bar")
         yield Footer()
 

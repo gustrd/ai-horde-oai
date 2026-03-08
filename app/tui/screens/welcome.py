@@ -61,7 +61,7 @@ class WelcomeScreen(Screen):
             with Static(id="button-row"):
                 yield Button("Validate & Save", id="validate-btn", variant="primary")
                 yield Button("Use Anonymous (0000)", id="anon-btn", variant="default")
-            yield Label("", id="status-label")
+            yield Label("", id="status-label", markup=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "anon-btn":

@@ -34,6 +34,7 @@ class HordeApp(App):
     """
 
     SCREENS = {
+        "welcome": WelcomeScreen,
         "dashboard": DashboardScreen,
         "config": ConfigScreen,
         "models": ModelsScreen,
@@ -42,11 +43,22 @@ class HordeApp(App):
         "history": HistoryScreen,
     }
 
+    BINDINGS = [
+        ("d", "switch_screen('dashboard')", "Dash"),
+        ("s", "switch_screen('config')", "Set"),
+        ("m", "switch_screen('models')", "Mod"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Log"),
+        ("h", "switch_screen('history')", "Hist"),
+        ("q", "quit", "Quit"),
+    ]
+
     def __init__(self, config: Settings | None = None, **kwargs):
         super().__init__(**kwargs)
         self.config: Settings = config or load_config()
         self.horde: HordeClient | None = None
         self.request_log: list[RequestLogEntry] = []
+        self.selected_model: str | None = None
 
     def compose(self) -> ComposeResult:
         # Placeholder; screens handle their own layouts
@@ -61,9 +73,9 @@ class HordeApp(App):
 
         # Show welcome if this is the first run (default anon key)
         if self.config.horde_api_key == "0000000000":
-            await self.push_screen(WelcomeScreen())
+            self.push_screen("welcome")
         else:
-            await self.push_screen(DashboardScreen())
+            self.push_screen("dashboard")
 
     async def on_unmount(self) -> None:
         if self.horde:
@@ -105,7 +117,7 @@ class HordeApp(App):
             api_key=new_config.horde_api_key,
             client_agent=new_config.client_agent,
         )
-        await self.switch_screen(DashboardScreen())
+        self.switch_screen("dashboard")
 
 
 def cli() -> None:

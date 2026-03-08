@@ -13,7 +13,7 @@ class HordeModel(BaseModel):
     eta: int = 0            # seconds to process current queue
     max_length: int = 512
     max_context_length: int = 1024
-    performance: str = ""
+    performance: Any = ""
     type: str = "text"
 
 

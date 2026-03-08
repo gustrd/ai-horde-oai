@@ -1184,11 +1184,12 @@ from textual.app import App
 class HordeOAIApp(App):
     TITLE = "ai-horde-oai"
     BINDINGS = [
-        ("f1", "push_screen('config')", "Config"),
-        ("f2", "push_screen('models')", "Models"),
-        ("f3", "push_screen('chat')", "Chat"),
-        ("f4", "push_screen('logs')", "Logs"),
-        ("f5", "push_screen('history')", "History"),
+        ("s", "switch_screen('config')", "Settings"),
+        ("m", "switch_screen('models')", "Models"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Logs"),
+        ("h", "switch_screen('history')", "History"),
+        ("d", "switch_screen('dashboard')", "Dashboard"),
         ("q", "quit", "Quit"),
     ]
 

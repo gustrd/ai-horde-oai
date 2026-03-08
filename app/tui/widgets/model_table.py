@@ -34,12 +34,13 @@ class ModelTable(Widget):
         with Horizontal(id="filter-row"):
             yield Label("Filter: ")
             yield Input(placeholder="name substring...", id="filter-input")
-        yield DataTable(id="model-table")
+        yield DataTable(id="model-table", cursor_type="row")
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
         table.add_columns("Status", "Name", "Context", "Max Len")
         self._render_table()
+        table.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         q = event.value.lower()
@@ -49,8 +50,10 @@ class ModelTable(Widget):
     def _render_table(self) -> None:
         table = self.query_one(DataTable)
         table.clear()
-        for m in self._displayed:
-            table.add_row("✓", m.name, str(m.max_context_length), str(m.max_length))
+        for i, m in enumerate(self._displayed):
+            table.add_row(
+                "✓", m.name, str(m.max_context_length), str(m.max_length), key=m.name
+            )
 
     def set_models(self, models: list[HordeModel]) -> None:
         self._all_models = models

@@ -30,8 +30,14 @@ class HistoryScreen(Screen):
 
     TITLE = "Chat History"
     BINDINGS = [
-        ("escape", "pop_screen", "Back"),
-        ("d", "delete_selected", "Delete"),
+        ("d", "switch_screen('dashboard')", "Dash"),
+        ("s", "switch_screen('config')", "Set"),
+        ("m", "switch_screen('models')", "Mod"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Log"),
+        ("h", "switch_screen('history')", "Hist"),
+        ("q", "quit", "Quit"),
+        ("x", "delete_selected", "Del"),
     ]
 
     DEFAULT_CSS = """
@@ -52,7 +58,7 @@ class HistoryScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="history-table")
-        yield Label("", id="info")
+        yield Label("", id="info", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:

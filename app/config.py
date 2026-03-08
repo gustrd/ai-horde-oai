@@ -34,7 +34,7 @@ class Settings(BaseModel):
     client_agent: str = "ai-horde-oai:0.1:github"
 
     # Model alias mapping
-    default_model: str = ""
+    default_model: str = "best"
     model_aliases: dict[str, str] = Field(default_factory=dict)
 
     # Model filters

@@ -12,7 +12,13 @@ class ConfigScreen(Screen):
 
     TITLE = "Configuration"
     BINDINGS = [
-        ("escape", "pop_screen", "Back"),
+        ("d", "switch_screen('dashboard')", "Dash"),
+        ("s", "switch_screen('config')", "Set"),
+        ("m", "switch_screen('models')", "Mod"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Log"),
+        ("h", "switch_screen('history')", "Hist"),
+        ("q", "quit", "Quit"),
         ("ctrl+s", "save", "Save"),
     ]
 
@@ -104,7 +110,7 @@ class ConfigScreen(Screen):
         with Horizontal(id="button-row"):
             yield Button("Save", id="save-btn", variant="primary")
             yield Button("Back", id="back-btn", variant="default")
-        yield Label("", id="status")
+        yield Label("", id="status", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -125,7 +131,7 @@ class ConfigScreen(Screen):
         if event.button.id == "save-btn":
             self.action_save()
         elif event.button.id == "back-btn":
-            self.action_pop_screen()
+            self.app.switch_screen("dashboard")
 
     def action_save(self) -> None:
         from app.config import RetrySettings, Settings, save_config

@@ -11,10 +11,15 @@ from app.tui.app import HordeApp
 from app.tui.screens.welcome import WelcomeScreen
 from app.tui.screens.dashboard import DashboardScreen
 from app.tui.screens.config import ConfigScreen
+from app.tui.screens.chat import ChatScreen
 from app.tui.screens.models import ModelsScreen
+from app.tui.screens.history import HistoryScreen
+from app.tui.screens.logs import LogsScreen
 from app.tui.widgets.kudos_bar import KudosBar
 from app.tui.widgets.model_table import ModelTable
 from app.schemas.horde import HordeModel
+from textual.widgets import Select, DataTable, Label, Input, TextArea
+from textual.coordinate import Coordinate
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +402,121 @@ async def test_model_table_filter_by_name():
             dt = table_widget.query_one(DataTable)
             assert dt.row_count == 2
             assert len(table_widget.displayed_models) == 2
+
+
+# ---------------------------------------------------------------------------
+# ChatScreen and History tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_chat_screen_no_selection_error():
+    """ChatScreen shows error when sending with no model selected."""
+    config = make_config()
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = ChatScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            # Ensure no selection
+            select = screen.query_one("#model-select", Select)
+            select.clear()
+            await pilot.pause()
+            
+            # Type something and send
+            await pilot.click("#message-input")
+            for char in "hello":
+                await pilot.press(char)
+            await pilot.click("#send-btn")
+            await pilot.pause()
+
+            status = screen.query_one("#status", Label)
+            assert "Error: No model selected." in str(status.content)
+
+
+@pytest.mark.asyncio
+async def test_models_to_chat_propagation():
+    """Selecting a model in ModelsScreen updates app.selected_model and ChatScreen."""
+    from textual.widgets import DataTable
+    
+    config = make_config()
+    app = HordeApp(config=config)
+    models = [HordeModel(name="test-model", max_context_length=4096, max_length=512)]
+    app.horde = make_horde_mock(models=models)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            # Mount models screen
+            models_screen = ModelsScreen()
+            await app.push_screen(models_screen)
+            await pilot.pause(0.5)
+            
+            # Call the event handler directly to avoid flaky input simulation
+            table = models_screen.query_one(DataTable)
+            row_key = list(table.rows.keys())[0]
+            
+            # Mock event with row_key
+            mock_event = MagicMock()
+            mock_event.row_key = row_key
+            models_screen.on_data_table_row_selected(mock_event)
+            await pilot.pause(1.0)
+
+            # Should have switched to ChatScreen
+            assert isinstance(app.screen, ChatScreen)
+            assert app.selected_model == "test-model"
+            
+            # Check Select widget in ChatScreen
+            select = app.screen.query_one("#model-select", Select)
+            assert select.value == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_chat_history_saving(tmp_path):
+    """ChatScreen saves history to JSON on successful response."""
+    import json
+    from pathlib import Path
+    
+    config = make_config()
+    app = HordeApp(config=config)
+    
+    # Mock httpx response
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "Hello! I am an AI."}}],
+        "usage": {"total_tokens": 10}
+    }
+    
+    # Path is now at module level in chat.py
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.tui.screens.chat.Path") as mock_path, \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        
+        mock_path.home.return_value = tmp_path
+        mock_post.return_value = mock_resp
+        
+        async with app.run_test() as pilot:
+            screen = ChatScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+            
+            # Set a model
+            select = screen.query_one("#model-select", Select)
+            select.set_options([("test", "test")])
+            select.value = "test"
+            
+            # Send message
+            inp = screen.query_one("#message-input", Input)
+            inp.value = "hi"
+            await pilot.click("#send-btn")
+            
+            # Wait for request to finish
+            await pilot.pause(0.5)
+            
+            # Check if file was created in tmp_path / .ai-horde-oai / history
+            history_dir = tmp_path / ".ai-horde-oai" / "history"
+            assert history_dir.exists()
+            files = list(history_dir.glob("*.json"))
+            assert len(files) > 0

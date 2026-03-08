@@ -24,7 +24,7 @@ def chat_to_horde(
     prompt = messages_to_prompt(request.messages, real_model)
 
     params = HordeTextParams(
-        max_length=min(request.max_tokens or 512, 512),
+        max_length=max(16, min(request.max_tokens or 512, 512)),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,
@@ -60,7 +60,7 @@ def completion_to_horde(
     prompt = request.prompt if isinstance(request.prompt, str) else request.prompt[0]
 
     params = HordeTextParams(
-        max_length=min(request.max_tokens or 512, 512),
+        max_length=max(16, min(request.max_tokens or 512, 512)),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,

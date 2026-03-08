@@ -23,8 +23,14 @@ class LogsScreen(Screen):
 
     TITLE = "Request Log"
     BINDINGS = [
-        ("escape", "pop_screen", "Back"),
-        ("c", "clear", "Clear"),
+        ("d", "switch_screen('dashboard')", "Dash"),
+        ("s", "switch_screen('config')", "Set"),
+        ("m", "switch_screen('models')", "Mod"),
+        ("c", "switch_screen('chat')", "Chat"),
+        ("l", "switch_screen('logs')", "Log"),
+        ("h", "switch_screen('history')", "Hist"),
+        ("q", "quit", "Quit"),
+        ("x", "clear", "Clear"),
     ]
 
     DEFAULT_CSS = """
@@ -41,7 +47,7 @@ class LogsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="log-table")
-        yield Label("No requests yet.", id="info")
+        yield Label("No requests yet.", id="info", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
