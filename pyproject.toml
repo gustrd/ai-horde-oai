@@ -18,10 +18,12 @@ dev = [
     "respx>=0.22",
     "pytest-cov>=6.0",
     "httpx>=0.28",
+    "textual>=1.0",
 ]
 
 [project.scripts]
 horde-oai = "app.main:cli"
+horde-oai-tui = "app.tui.app:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
