@@ -79,7 +79,7 @@ async def with_retry(
                 await cancel_fn(job_id)
             last_exc = HordeTimeoutError(f"Attempt {attempt + 1} timed out after {timeout_seconds}s")
 
-        except (HordeJobFailed, Exception) as exc:
+        except HordeJobFailed as exc:
             if job_id:
                 await cancel_fn(job_id)
             last_exc = exc
