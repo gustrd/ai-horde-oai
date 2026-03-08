@@ -1,0 +1,21 @@
+{
+  "done": true,
+  "faulted": false,
+  "processing": 0,
+  "waiting": 0,
+  "finished": 1,
+  "queue_position": 0,
+  "wait_time": 0,
+  "kudos": 15.0,
+  "generations": [
+    {
+      "text": "Hello! I'm doing well. How can I help you today?",
+      "model": "aphrodite/llama-3.1-8b-instruct",
+      "worker_id": "worker-abc-123",
+      "worker_name": "gpu-node-7",
+      "kudos": 15.0,
+      "state": "ok"
+    }
+  ],
+  "is_possible": true
+}

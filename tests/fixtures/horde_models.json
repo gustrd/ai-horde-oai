@@ -1,0 +1,57 @@
+[
+  {
+    "name": "aphrodite/llama-3.1-8b-instruct",
+    "count": 5,
+    "queued": 2,
+    "jobs": 120.0,
+    "eta": 10,
+    "max_length": 512,
+    "max_context_length": 8192,
+    "performance": "15 tokens per second",
+    "type": "text"
+  },
+  {
+    "name": "aphrodite/llama-3.1-70b-instruct",
+    "count": 2,
+    "queued": 5,
+    "jobs": 45.0,
+    "eta": 30,
+    "max_length": 512,
+    "max_context_length": 4096,
+    "performance": "5 tokens per second",
+    "type": "text"
+  },
+  {
+    "name": "koboldcpp/mistral-nemo-12b",
+    "count": 3,
+    "queued": 1,
+    "jobs": 80.0,
+    "eta": 8,
+    "max_length": 512,
+    "max_context_length": 16384,
+    "performance": "10 tokens per second",
+    "type": "text"
+  },
+  {
+    "name": "koboldcpp/yi-34b-200k",
+    "count": 1,
+    "queued": 0,
+    "jobs": 20.0,
+    "eta": 5,
+    "max_length": 512,
+    "max_context_length": 200000,
+    "performance": "3 tokens per second",
+    "type": "text"
+  },
+  {
+    "name": "koboldcpp/phi-3-mini-4k",
+    "count": 4,
+    "queued": 3,
+    "jobs": 200.0,
+    "eta": 5,
+    "max_length": 512,
+    "max_context_length": 4096,
+    "performance": "25 tokens per second",
+    "type": "text"
+  }
+]

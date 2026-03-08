@@ -1,0 +1,22 @@
+{
+  "done": true,
+  "faulted": false,
+  "processing": 0,
+  "waiting": 0,
+  "finished": 1,
+  "queue_position": 0,
+  "wait_time": 0,
+  "kudos": 30.0,
+  "generations": [
+    {
+      "img": "https://image.aihorde.net/test-image.webp",
+      "seed": "12345",
+      "worker_id": "worker-img-456",
+      "worker_name": "gpu-img-node-1",
+      "model": "stable_diffusion_xl",
+      "state": "ok",
+      "censored": false
+    }
+  ],
+  "is_possible": true
+}
