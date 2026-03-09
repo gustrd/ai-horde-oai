@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(curl:*)",
-      "Bash(.venv/Scripts/python:*)"
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(\"C:/Users/gustr/_git/ai-horde-oai/tests/test_log_store.py\":*)",
+      "Bash(uv run:*)"
     ]
   }
 }

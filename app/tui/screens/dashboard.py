@@ -1,6 +1,9 @@
 """Dashboard (home) screen."""
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
+
 from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.screen import Screen
@@ -20,18 +23,33 @@ class DashboardScreen(Screen):
         ("c", "switch_screen('chat')", "Chat"),
         ("l", "switch_screen('logs')", "Log"),
         ("q", "quit", "Quit"),
+        ("r", "refresh", "Ref"),
     ]
 
     DEFAULT_CSS = """
     DashboardScreen #status-panel {
         border: round $accent;
         padding: 1 2;
-        margin: 1;
+        margin: 1 1 0 1;
         height: auto;
+    }
+    DashboardScreen #stats-panel {
+        border: round $primary;
+        padding: 1 2;
+        margin: 0 1 1 1;
+        height: auto;
+    }
+    DashboardScreen .panel-title {
+        color: $accent;
+        text-style: bold;
+        margin-bottom: 1;
     }
     DashboardScreen .stat-row {
         height: 1;
         margin-bottom: 1;
+    }
+    DashboardScreen .stat-row-last {
+        height: 1;
     }
     DashboardScreen #kudos-bar {
         dock: bottom;
@@ -45,37 +63,117 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Static(id="status-panel"):
+            yield Label("Connection", classes="panel-title", markup=False)
             yield Label("", id="server-status", classes="stat-row", markup=False)
             yield Label("", id="api-key-status", classes="stat-row", markup=False)
-            yield Label("", id="model-stats", classes="stat-row", markup=False)
+            yield Label("", id="horde-status", classes="stat-row", markup=False)
+            yield Label("", id="model-stats", classes="stat-row-last", markup=False)
+        with Static(id="stats-panel"):
+            yield Label("Activity", classes="panel-title", markup=False)
             yield Label("", id="request-stats", classes="stat-row", markup=False)
+            yield Label("", id="session-stats", classes="stat-row", markup=False)
+            yield Label("", id="last-request", classes="stat-row-last", markup=False)
         yield KudosBar(id="kudos-bar")
         yield Footer()
 
     def on_mount(self) -> None:
-        self._sync_from_app()
         self._refresh_labels()
+        self.run_worker(self._load_horde_stats(), exclusive=True, name="dashboard-stats")
 
     def on_screen_resume(self) -> None:
-        self._sync_from_app()
-
-    def _sync_from_app(self) -> None:
-        self.models_count = getattr(self.app, "model_count", 0)
-        self.total_models = getattr(self.app, "model_total", 0)
+        self._refresh_labels()
+        self.run_worker(self._load_horde_stats(), exclusive=True, name="dashboard-stats")
 
     def _refresh_labels(self) -> None:
         config = self.app.config
         self.query_one("#server-status", Label).update(
-            f"Server: ● Running on {config.host}:{config.port}"
+            f"  Server  : Running on {config.host}:{config.port}"
         )
         masked = f"****{config.horde_api_key[-4:]}" if len(config.horde_api_key) > 4 else "****"
-        self.query_one("#api-key-status", Label).update(f"API Key: {masked}")
+        self.query_one("#api-key-status", Label).update(f"  API key : {masked}")
         self.query_one("#model-stats", Label).update(
-            f"Models: {self.models_count} shown / {self.total_models} total"
+            f"  Models  : {self.models_count} shown / {self.total_models} total"
         )
+        log = getattr(self.app, "request_log", [])
+        session_count = len(log)
         self.query_one("#request-stats", Label).update(
-            f"Requests this session: {self.request_count}"
+            f"  Requests: {session_count} this session"
         )
+        if log:
+            last = log[-1]
+            last_time = last.timestamp.strftime("%H:%M:%S")
+            last_model = last.model or "—"
+            last_dur = f"{last.duration:.1f}s"
+            self.query_one("#last-request", Label).update(
+                f"  Last    : {last_time}  {last_model}  ({last_dur})"
+            )
+        else:
+            self.query_one("#last-request", Label).update("  Last    : —")
+
+    async def _load_horde_stats(self) -> None:
+        horde = getattr(self.app, "horde", None)
+        if horde is None:
+            self.query_one("#horde-status", Label).update("  Horde   : not connected")
+            self.query_one("#session-stats", Label).update("  Kudos   : —")
+            return
+
+        # Fetch models and user info concurrently
+        models_result = None
+        user_result = None
+        models_err = None
+        user_err = None
+
+        try:
+            models_task = asyncio.create_task(horde.get_models(type="text"))
+            user_task = asyncio.create_task(horde.get_user())
+            models_result, user_result = await asyncio.gather(
+                models_task, user_task, return_exceptions=True
+            )
+        except Exception as e:
+            models_err = e
+
+        # Handle models
+        if isinstance(models_result, Exception):
+            models_err = models_result
+            models_result = None
+        if isinstance(user_result, Exception):
+            user_err = user_result
+            user_result = None
+
+        if models_result is not None:
+            total = len(models_result)
+            # Apply config filters for "shown" count (same logic as ModelsScreen)
+            from app.horde.filters import filter_models
+            cfg = self.app.config
+            shown_models = filter_models(
+                models_result,
+                whitelist=cfg.model_whitelist or None,
+                blocklist=cfg.model_blocklist or None,
+                min_context=cfg.model_min_context,
+                min_max_length=cfg.model_min_max_length,
+            )
+            shown = len(shown_models)
+            self.app.model_count = shown
+            self.app.model_total = total
+            self.models_count = shown
+            self.total_models = total
+            self.query_one("#horde-status", Label).update("  Horde   : connected")
+        else:
+            err_msg = str(models_err)[:40] if models_err else "unavailable"
+            self.query_one("#horde-status", Label).update(f"  Horde   : error — {err_msg}")
+
+        if user_result is not None:
+            kudos = int(getattr(user_result, "kudos", 0))
+            username = getattr(user_result, "username", "")
+            self.query_one("#session-stats", Label).update(
+                f"  Kudos   : {kudos:,}  ({username})"
+            )
+            self.query_one(KudosBar).balance = kudos
+        else:
+            self.query_one("#session-stats", Label).update("  Kudos   : —")
+
+        # Refresh other labels now that model counts are updated
+        self._refresh_labels()
 
     def watch_models_count(self, _: int) -> None:
         self._refresh_labels()
@@ -91,3 +189,8 @@ class DashboardScreen(Screen):
 
     def increment_requests(self) -> None:
         self.request_count += 1
+
+    def action_refresh(self) -> None:
+        self.query_one("#horde-status", Label).update("  Horde   : loading…")
+        self.query_one("#model-stats", Label).update("  Models  : loading…")
+        self.run_worker(self._load_horde_stats(), exclusive=True, name="dashboard-stats")

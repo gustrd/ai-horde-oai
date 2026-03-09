@@ -125,7 +125,7 @@ class LogsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id="log-table")
+        yield DataTable(id="log-table", cursor_type="row")
         yield Label("No requests yet.", id="info", markup=False)
         yield Footer()
 

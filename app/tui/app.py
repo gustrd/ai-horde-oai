@@ -8,7 +8,7 @@ from textual.widgets import Label
 
 from app.config import Settings, load_config, save_config
 from app.horde.client import HordeClient
-from app.log_store import RequestLogEntry
+from app.log_store import RequestLogEntry, append_entry, load_entries, trim_log_file
 from app.tui.screens.chat import ChatScreen
 from app.tui.screens.config import ConfigScreen
 from app.tui.screens.dashboard import DashboardScreen
@@ -57,7 +57,8 @@ class HordeApp(App):
         super().__init__(**kwargs)
         self.config: Settings = config or load_config()
         self.horde: HordeClient | None = None
-        self.request_log: list[RequestLogEntry] = []
+        trim_log_file()
+        self.request_log: list[RequestLogEntry] = load_entries()
         self.selected_model: str | None = None
         # Model counts updated by ModelsScreen after each load
         self.model_count: int = 0
@@ -102,13 +103,16 @@ class HordeApp(App):
             host=self.config.host,
             port=self.config.port,
             log_config=None,
-            install_signal_handlers=False,
         )
         self._uv_server = uvicorn.Server(uv_config)
+        # Prevent uvicorn from installing its own SIGINT/SIGTERM handlers —
+        # Textual owns the event loop and handles shutdown itself.
+        self._uv_server.install_signal_handlers = lambda: None
         self._server_task = asyncio.create_task(self._uv_server.serve())
 
     def _notify_logs(self, entry: RequestLogEntry) -> None:
         """Called by FastAPI middleware when a new log entry is created."""
+        append_entry(entry)
         for screen in self.screen_stack:
             if isinstance(screen, LogsScreen):
                 screen.add_entry(entry)

@@ -1,8 +1,14 @@
 """Canonical RequestLogEntry definition shared by the FastAPI server and TUI."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+LOG_PATH = Path.home() / ".ai-horde-oai" / "requests.jsonl"
+MAX_PERSISTED_ENTRIES = 2000   # lines kept in the JSONL file
+MAX_LOADED_ENTRIES = 500       # entries loaded into memory on startup
 
 
 @dataclass
@@ -22,3 +28,100 @@ class RequestLogEntry:
     response_text: str = ""
     error: str = ""
     source: str = "api"            # always "api"; reserved for future use
+
+
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+
+def entry_to_dict(entry: RequestLogEntry) -> dict:
+    d = {
+        "timestamp": entry.timestamp.isoformat(),
+        "method": entry.method,
+        "path": entry.path,
+        "status": entry.status,
+        "duration": entry.duration,
+        "model": entry.model,
+        "real_model": entry.real_model,
+        "worker": entry.worker,
+        "worker_id": entry.worker_id,
+        "kudos": entry.kudos,
+        "messages": entry.messages,
+        "prompt": entry.prompt,
+        "response_text": entry.response_text,
+        "error": entry.error,
+        "source": entry.source,
+    }
+    return d
+
+
+def entry_from_dict(d: dict) -> RequestLogEntry:
+    ts = d.get("timestamp", "")
+    try:
+        timestamp = datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        timestamp = datetime.now()
+    return RequestLogEntry(
+        timestamp=timestamp,
+        method=d.get("method", ""),
+        path=d.get("path", ""),
+        status=int(d.get("status", 0)),
+        duration=float(d.get("duration", 0.0)),
+        model=d.get("model", ""),
+        real_model=d.get("real_model", ""),
+        worker=d.get("worker", ""),
+        worker_id=d.get("worker_id", ""),
+        kudos=float(d.get("kudos", 0.0)),
+        messages=d.get("messages"),
+        prompt=d.get("prompt", ""),
+        response_text=d.get("response_text", ""),
+        error=d.get("error", ""),
+        source=d.get("source", "api"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# File I/O
+# ---------------------------------------------------------------------------
+
+def append_entry(entry: RequestLogEntry, path: Path = LOG_PATH) -> None:
+    """Append one entry as a JSON line. Silently ignores I/O errors."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry_to_dict(entry)) + "\n")
+    except Exception:
+        pass
+
+
+def load_entries(path: Path = LOG_PATH, max_entries: int = MAX_LOADED_ENTRIES) -> list[RequestLogEntry]:
+    """Load the last *max_entries* entries from the JSONL file."""
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        recent = lines[-max_entries:] if len(lines) > max_entries else lines
+        entries = []
+        for line in recent:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(entry_from_dict(json.loads(line)))
+            except Exception:
+                continue
+        return entries
+    except Exception:
+        return []
+
+
+def trim_log_file(path: Path = LOG_PATH, max_entries: int = MAX_PERSISTED_ENTRIES) -> None:
+    """Keep only the last *max_entries* lines in the file to prevent unbounded growth."""
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > max_entries:
+            path.write_text("\n".join(lines[-max_entries:]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
