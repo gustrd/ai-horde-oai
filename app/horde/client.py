@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
 import httpx
@@ -34,6 +35,8 @@ class HordeClient:
         self._model_cache_ttl = model_cache_ttl
         self._model_cache: list[HordeModel] = []
         self._model_cache_expires: float = 0.0
+        self._enriched_cache: list[HordeModel] = []
+        self._enriched_cache_expires: float = 0.0
         self.http = httpx.AsyncClient(
             base_url=base_url,
             headers={
@@ -68,8 +71,53 @@ class HordeClient:
         return models
 
     def invalidate_model_cache(self) -> None:
-        """Force the next get_models() call to fetch fresh data."""
+        """Force the next get_models() / get_enriched_models() call to fetch fresh data."""
         self._model_cache_expires = 0.0
+        self._enriched_cache_expires = 0.0
+
+    async def get_enriched_models(self, type: str = "text") -> list[HordeModel]:
+        """Fetch models enriched with real max_context_length/max_length from online workers.
+
+        Uses the same TTL as the model cache. Falls back to bare models if workers
+        cannot be fetched.
+        """
+        now = time.monotonic()
+        if self._enriched_cache and now < self._enriched_cache_expires:
+            return self._enriched_cache
+
+        models, workers = await asyncio.gather(
+            self.get_models(type=type),
+            self.get_text_workers(),
+            return_exceptions=True,
+        )
+
+        if isinstance(models, Exception):
+            raise models
+
+        if not isinstance(workers, Exception) and workers:
+            ctx_map: dict[str, int] = {}
+            len_map: dict[str, int] = {}
+            for w in workers:
+                if not w.get("online"):
+                    continue
+                max_ctx = w.get("max_context_length", 0)
+                max_len = w.get("max_length", 0)
+                for name in w.get("models", []):
+                    if max_ctx > ctx_map.get(name, 0):
+                        ctx_map[name] = max_ctx
+                    if max_len > len_map.get(name, 0):
+                        len_map[name] = max_len
+            models = [
+                m.model_copy(update={
+                    "max_context_length": ctx_map.get(m.name, m.max_context_length),
+                    "max_length": len_map.get(m.name, m.max_length),
+                })
+                for m in models
+            ]
+
+        self._enriched_cache = models
+        self._enriched_cache_expires = now + self._model_cache_ttl
+        return models
 
     async def get_text_workers(self) -> list[dict]:
         r = self._check(await self.http.get("/v2/workers", params={"type": "text"}))

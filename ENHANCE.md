@@ -109,11 +109,11 @@ Config uses `worker_blocklist` but Horde API uses `worker_blacklist`. Works corr
 
 ### 21. ModelRouter uses stale startup config — FIXED
 **File:** `app/horde/routing.py`
-`resolve()` now accepts `config` parameter. Chat and completions routers pass `request.app.state.config` at request time. Best/fast fall back to unfiltered list if filters eliminate everything.
+`resolve()` now accepts `config` parameter. Chat and completions routers pass `request.app.state.config` at request time.
 
-### 22. "best"/"fast" 404 when filters too strict — FIXED
+### 22. "best"/"fast" ignores filters / routes to non-whitelisted models — FIXED
 **File:** `app/horde/routing.py`
-`_pick_best()` and `_pick_fast()` now fall back to unfiltered model list when settings filters eliminate all models. Only raises `ModelNotFoundError` when Horde returns zero models.
+`_pick_best()` and `_pick_fast()` previously fell back to the unfiltered model list when all models were filtered out, bypassing the whitelist. Now they raise `ModelNotFoundError` instead. Routers also use `get_enriched_models()` so context-length filters work correctly.
 
 ### 23. No actual model / worker info in chat — FIXED
 **Files:** `app/routers/chat.py`, `app/tui/screens/chat.py`
@@ -134,6 +134,10 @@ Widget owns all filtering (whitelist, blocklist, min_context, min_max_length + t
 ### 27. Config screen doesn't re-apply filters on resume — FIXED
 **File:** `app/tui/screens/models.py`
 `on_screen_resume()` calls `widget.update_filters()` with current config values.
+
+### 28. "Broaden on Retry" UI option removed
+**File:** `app/tui/screens/config.py`
+The toggle was removed from the config screen. The `broaden_on_retry` field remains in `RetrySettings` for programmatic use but is no longer user-configurable.
 
 ---
 

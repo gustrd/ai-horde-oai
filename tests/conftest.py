@@ -15,11 +15,13 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def _isolate_config(tmp_path, monkeypatch):
-    """Prevent tests from reading/writing the real user config."""
+    """Prevent tests from reading/writing the real user config or log file."""
     import app.config as _cfg
+    import app.log_store as _log
 
     monkeypatch.setattr(_cfg, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(_cfg, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(_log, "LOG_PATH", tmp_path / "requests.jsonl")
 
 
 def load_fixture(name: str):
@@ -57,6 +59,9 @@ def mock_horde(respx_mock):
     )
     respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
         return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    respx_mock.get("https://aihorde.net/api/v2/workers").mock(
+        return_value=httpx.Response(200, json=[])
     )
     respx_mock.get("https://aihorde.net/api/v2/find_user").mock(
         return_value=httpx.Response(200, json=USER_FIXTURE)

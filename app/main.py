@@ -71,6 +71,15 @@ def create_app(config: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:
         start = time.monotonic()
+
+        if request.url.path.startswith("/v1/"):
+            start_callback = getattr(request.app.state, "start_callback", None)
+            if start_callback is not None:
+                try:
+                    start_callback(request.method, request.url.path)
+                except Exception:
+                    pass
+
         response = await call_next(request)
         duration = time.monotonic() - start
 
@@ -103,6 +112,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         prompt=extras.get("prompt", ""),
                         response_text=extras.get("response_text", ""),
                         error=extras.get("error", ""),
+                        input_tokens=extras.get("input_tokens", 0),
+                        output_tokens=extras.get("output_tokens", 0),
                     )
                     request_log = getattr(request.app.state, "request_log", None)
                     if request_log is not None:

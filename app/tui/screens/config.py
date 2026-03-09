@@ -4,7 +4,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, Switch
+from textual.widgets import Button, Footer, Header, Input, Label
 
 
 class ConfigScreen(Screen):
@@ -105,10 +105,6 @@ class ConfigScreen(Screen):
             with Horizontal(classes="field-row"):
                 yield Label("Timeout (s):", classes="field-label")
                 yield Input(id="field-timeout", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("Broaden on Retry:", classes="field-label")
-                yield Switch(id="field-broaden")
-
         with Horizontal(id="button-row"):
             yield Button("Save", id="save-btn", variant="primary")
             yield Button("Back", id="back-btn", variant="default")
@@ -128,7 +124,7 @@ class ConfigScreen(Screen):
         self.query_one("#field-blocklist", Input).value = ",".join(cfg.model_blocklist)
         self.query_one("#field-max-retries", Input).value = str(cfg.retry.max_retries)
         self.query_one("#field-timeout", Input).value = str(cfg.retry.timeout_seconds)
-        self.query_one("#field-broaden", Switch).value = cfg.retry.broaden_on_retry
+
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
@@ -156,7 +152,6 @@ class ConfigScreen(Screen):
         new_retry = self.app.config.retry.model_copy(update={
             "max_retries": max_retries,
             "timeout_seconds": timeout,
-            "broaden_on_retry": self.query_one("#field-broaden", Switch).value,
         })
         new_config = self.app.config.model_copy(update={
             "horde_api_key": self.query_one("#field-api-key", Input).value,

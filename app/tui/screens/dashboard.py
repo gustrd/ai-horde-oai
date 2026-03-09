@@ -92,7 +92,7 @@ class DashboardScreen(Screen):
         masked = f"****{config.horde_api_key[-4:]}" if len(config.horde_api_key) > 4 else "****"
         self.query_one("#api-key-status", Label).update(f"  API key : {masked}")
         self.query_one("#model-stats", Label).update(
-            f"  Models  : {self.models_count} shown / {self.total_models} total"
+            f"  Models  : {self.models_count} selected / {self.total_models} total"
         )
         log = getattr(self.app, "request_log", [])
         session_count = len(log)
@@ -117,32 +117,57 @@ class DashboardScreen(Screen):
             self.query_one("#session-stats", Label).update("  Kudos   : —")
             return
 
-        # Fetch models and user info concurrently
+        # Fetch models, workers, and user info concurrently
         models_result = None
+        workers_result = None
         user_result = None
         models_err = None
         user_err = None
 
         try:
             models_task = asyncio.create_task(horde.get_models(type="text"))
+            workers_task = asyncio.create_task(horde.get_text_workers())
             user_task = asyncio.create_task(horde.get_user())
-            models_result, user_result = await asyncio.gather(
-                models_task, user_task, return_exceptions=True
+            models_result, workers_result, user_result = await asyncio.gather(
+                models_task, workers_task, user_task, return_exceptions=True
             )
         except Exception as e:
             models_err = e
 
-        # Handle models
+        # Handle errors
         if isinstance(models_result, Exception):
             models_err = models_result
             models_result = None
+        if isinstance(workers_result, Exception):
+            workers_result = None
         if isinstance(user_result, Exception):
             user_err = user_result
             user_result = None
 
         if models_result is not None:
+            # Enrich models with worker max_context_length / max_length (same as ModelsScreen)
+            if workers_result:
+                ctx_map: dict[str, int] = {}
+                len_map: dict[str, int] = {}
+                for w in workers_result:
+                    if not w.get("online"):
+                        continue
+                    max_ctx = w.get("max_context_length", 0)
+                    max_len = w.get("max_length", 0)
+                    for model_name in w.get("models", []):
+                        if max_ctx > ctx_map.get(model_name, 0):
+                            ctx_map[model_name] = max_ctx
+                        if max_len > len_map.get(model_name, 0):
+                            len_map[model_name] = max_len
+                models_result = [
+                    m.model_copy(update={
+                        "max_context_length": ctx_map.get(m.name, m.max_context_length),
+                        "max_length": len_map.get(m.name, m.max_length),
+                    })
+                    for m in models_result
+                ]
+
             total = len(models_result)
-            # Apply config filters for "shown" count (same logic as ModelsScreen)
             from app.horde.filters import filter_models
             cfg = self.app.config
             shown_models = filter_models(

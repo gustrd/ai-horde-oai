@@ -7,6 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".ai-horde-oai" / "requests.jsonl"
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 characters per token."""
+    return max(0, len(text) // 4)
+
+
 MAX_PERSISTED_ENTRIES = 2000   # lines kept in the JSONL file
 MAX_LOADED_ENTRIES = 500       # entries loaded into memory on startup
 
@@ -28,6 +35,8 @@ class RequestLogEntry:
     response_text: str = ""
     error: str = ""
     source: str = "api"            # always "api"; reserved for future use
+    input_tokens: int = 0          # estimated input token count
+    output_tokens: int = 0         # estimated output token count
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +60,8 @@ def entry_to_dict(entry: RequestLogEntry) -> dict:
         "response_text": entry.response_text,
         "error": entry.error,
         "source": entry.source,
+        "input_tokens": entry.input_tokens,
+        "output_tokens": entry.output_tokens,
     }
     return d
 
@@ -77,6 +88,8 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
         response_text=d.get("response_text", ""),
         error=d.get("error", ""),
         source=d.get("source", "api"),
+        input_tokens=int(d.get("input_tokens", 0)),
+        output_tokens=int(d.get("output_tokens", 0)),
     )
 
 
@@ -84,8 +97,10 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
 # File I/O
 # ---------------------------------------------------------------------------
 
-def append_entry(entry: RequestLogEntry, path: Path = LOG_PATH) -> None:
+def append_entry(entry: RequestLogEntry, path: Path | None = None) -> None:
     """Append one entry as a JSON line. Silently ignores I/O errors."""
+    if path is None:
+        path = LOG_PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
@@ -94,8 +109,10 @@ def append_entry(entry: RequestLogEntry, path: Path = LOG_PATH) -> None:
         pass
 
 
-def load_entries(path: Path = LOG_PATH, max_entries: int = MAX_LOADED_ENTRIES) -> list[RequestLogEntry]:
+def load_entries(path: Path | None = None, max_entries: int = MAX_LOADED_ENTRIES) -> list[RequestLogEntry]:
     """Load the last *max_entries* entries from the JSONL file."""
+    if path is None:
+        path = LOG_PATH
     if not path.exists():
         return []
     try:
@@ -115,8 +132,10 @@ def load_entries(path: Path = LOG_PATH, max_entries: int = MAX_LOADED_ENTRIES) -
         return []
 
 
-def trim_log_file(path: Path = LOG_PATH, max_entries: int = MAX_PERSISTED_ENTRIES) -> None:
+def trim_log_file(path: Path | None = None, max_entries: int = MAX_PERSISTED_ENTRIES) -> None:
     """Keep only the last *max_entries* lines in the file to prevent unbounded growth."""
+    if path is None:
+        path = LOG_PATH
     if not path.exists():
         return
     try:

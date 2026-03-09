@@ -67,6 +67,8 @@ class LogDetailModal(ModalScreen):
             f"  Worker:     {e.worker or '—'}",
             f"  Worker ID:  {e.worker_id or '—'}",
             f"  Kudos:      {e.kudos:.2f}",
+            f"  Tokens in:  {e.input_tokens:,}  (~estimated)",
+            f"  Tokens out: {e.output_tokens:,}  (~estimated)",
         ]
 
         if e.error:
@@ -121,53 +123,70 @@ class LogsScreen(Screen):
         padding: 0 1;
         color: $text-muted;
     }
+    LogsScreen #active-label {
+        height: 1;
+        padding: 0 1;
+        color: $warning;
+    }
     """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="log-table", cursor_type="row")
         yield Label("No requests yet.", id="info", markup=False)
+        yield Label("", id="active-label", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Time", "Method", "Path", "Status", "Dur", "Model", "Worker", "Kudos")
-        for entry in self.app.request_log:
-            self._add_row(entry)
+        table.add_columns("Time", "Status", "Dur", "Model", "Kudos", "Tokens in→out", "Output preview")
+        self._rebuild_table()
 
     def on_screen_resume(self) -> None:
         """Sync any entries added while this screen was not active."""
-        table = self.query_one(DataTable)
-        if table.row_count < len(self.app.request_log):
-            for entry in self.app.request_log[table.row_count:]:
-                self._add_row(entry)
+        if self.query_one(DataTable).row_count != len(self.app.request_log):
+            self._rebuild_table()
 
-    def _add_row(self, entry: RequestLogEntry) -> None:
+    def _rebuild_table(self) -> None:
+        """Rebuild the table newest-first from request_log."""
         table = self.query_one(DataTable)
-        table.add_row(
-            entry.timestamp.strftime("%H:%M:%S"),
-            entry.method,
-            entry.path,
-            str(entry.status),
-            f"{entry.duration:.1f}s",
-            entry.model,
-            entry.worker,
-            f"{entry.kudos:.1f}" if entry.kudos else "—",
-        )
+        table.clear()
+        for entry in reversed(self.app.request_log):
+            preview = (entry.response_text or entry.error or "").replace("\n", " ")[:60]
+            table.add_row(
+                entry.timestamp.strftime("%H:%M:%S"),
+                str(entry.status),
+                f"{entry.duration:.1f}s",
+                entry.model,
+                f"{entry.kudos:.1f}" if entry.kudos else "—",
+                f"{entry.input_tokens}→{entry.output_tokens}" if (entry.input_tokens or entry.output_tokens) else "—",
+                preview,
+            )
         count = table.row_count
-        self.query_one("#info", Label).update(
-            f"{count} request{'s' if count != 1 else ''} — Enter to view detail"
-        )
+        if count:
+            self.query_one("#info", Label).update(
+                f"{count} request{'s' if count != 1 else ''} — Enter to view detail"
+            )
 
     def add_entry(self, entry: RequestLogEntry) -> None:
-        self._add_row(entry)
+        self._rebuild_table()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        idx = event.cursor_row
-        if 0 <= idx < len(self.app.request_log):
-            self.app.push_screen(LogDetailModal(self.app.request_log[idx]))
+        log = self.app.request_log
+        # Table is newest-first, so row 0 = last log entry
+        idx = len(log) - 1 - event.cursor_row
+        if 0 <= idx < len(log):
+            self.app.push_screen(LogDetailModal(log[idx]))
+
+    def update_active(self, active: list[dict]) -> None:
+        label = self.query_one("#active-label", Label)
+        if not active:
+            label.update("")
+        else:
+            parts = [f"● {r['method']} {r['path']}" for r in active]
+            label.update("  " + " | ".join(parts))
 
     def action_clear(self) -> None:
         self.app.request_log.clear()
         self.query_one(DataTable).clear()
-        self.query_one("#info", Label).update("Log cleared.")
+        self.query_one("#info", Label).update("No requests yet.")

@@ -25,19 +25,17 @@ class ModelRouter:
         )
 
     def _pick_best(self, models: list[HordeModel], config: Settings) -> str:
-        """Pick model with most workers. Falls back to unfiltered if all filtered out."""
-        filtered = self._apply_filters(models, config)
-        candidates = filtered or models  # graceful fallback if filters eliminate everything
+        """Pick model with most workers."""
+        candidates = self._apply_filters(models, config)
         if not candidates:
-            raise ModelNotFoundError("No text models available from Horde")
+            raise ModelNotFoundError("No text models available from Horde after applying filters")
         return max(candidates, key=lambda m: m.count).name
 
     def _pick_fast(self, models: list[HordeModel], config: Settings) -> str:
-        """Pick model with lowest ETA. Falls back to unfiltered if all filtered out."""
-        filtered = self._apply_filters(models, config)
-        candidates = filtered or models
+        """Pick model with lowest ETA."""
+        candidates = self._apply_filters(models, config)
         if not candidates:
-            raise ModelNotFoundError("No text models available from Horde")
+            raise ModelNotFoundError("No text models available from Horde after applying filters")
         return min(candidates, key=lambda m: (m.queued, m.eta)).name
 
     async def resolve(self, alias: str, models: list[HordeModel], config: Settings | None = None) -> str:

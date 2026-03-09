@@ -94,6 +94,7 @@ async def test_logs_screen_add_entry_appends_row():
             assert screen.query_one(DataTable).row_count == 0
 
             entry = make_entry()
+            app.request_log.append(entry)
             screen.add_entry(entry)
             await pilot.pause()
 
@@ -140,7 +141,7 @@ async def test_logs_screen_clear_action():
             assert screen.query_one(DataTable).row_count == 0
             assert len(app.request_log) == 0
             info = screen.query_one("#info", Label)
-            assert "cleared" in str(info.content).lower()
+            assert "No requests" in str(info.content)
 
 
 @pytest.mark.asyncio
@@ -155,7 +156,9 @@ async def test_logs_screen_info_updates_with_count():
             await pilot.pause()
 
             for _ in range(3):
-                screen.add_entry(make_entry())
+                entry = make_entry()
+                app.request_log.append(entry)
+                screen.add_entry(entry)
             await pilot.pause()
 
             info_text = str(screen.query_one("#info", Label).content)

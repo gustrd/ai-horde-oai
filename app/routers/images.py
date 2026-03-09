@@ -51,6 +51,7 @@ async def image_generations(request: Request, body: ImageGenerationRequest) -> I
         "model": real_model,
         "real_model": real_model,
         "prompt": body.prompt,
+        "kudos": status.kudos or 0.0,
     }
 
     images: list[ImageData] = []

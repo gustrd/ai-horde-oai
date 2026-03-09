@@ -66,6 +66,7 @@ class HordeApp(App):
         self._start_server = start_server
         self._uv_server = None
         self._server_task: asyncio.Task | None = None
+        self.active_requests: list[dict] = []
 
     def compose(self) -> ComposeResult:
         # Placeholder; screens handle their own layouts
@@ -97,6 +98,7 @@ class HordeApp(App):
         # Share the TUI's request_log and notify callback with the FastAPI app
         fastapi_app.state.request_log = self.request_log
         fastapi_app.state.log_callback = self._notify_logs
+        fastapi_app.state.start_callback = self._notify_request_start
 
         uv_config = uvicorn.Config(
             app=fastapi_app,
@@ -110,12 +112,29 @@ class HordeApp(App):
         self._uv_server.install_signal_handlers = lambda: None
         self._server_task = asyncio.create_task(self._uv_server.serve())
 
+    def _notify_request_start(self, method: str, path: str) -> None:
+        """Called by FastAPI middleware when a request begins."""
+        self.active_requests.append({"method": method, "path": path})
+        self._refresh_active_display()
+
     def _notify_logs(self, entry: RequestLogEntry) -> None:
-        """Called by FastAPI middleware when a new log entry is created."""
+        """Called by FastAPI middleware when a request completes."""
+        # Remove one matching in-flight entry
+        for i, r in enumerate(self.active_requests):
+            if r["method"] == entry.method and r["path"] == entry.path:
+                self.active_requests.pop(i)
+                break
         append_entry(entry)
+        self._refresh_active_display()
         for screen in self.screen_stack:
             if isinstance(screen, LogsScreen):
                 screen.add_entry(entry)
+                break
+
+    def _refresh_active_display(self) -> None:
+        for screen in self.screen_stack:
+            if isinstance(screen, LogsScreen):
+                screen.update_active(self.active_requests)
                 break
 
     async def on_unmount(self) -> None:

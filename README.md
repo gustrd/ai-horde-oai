@@ -53,7 +53,6 @@ model_blocklist: ["yi"]
 retry:
   max_retries: 2
   timeout_seconds: 300
-  broaden_on_retry: true
 ```
 
 Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`.

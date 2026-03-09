@@ -14,7 +14,7 @@ from app.horde.client import HordeClient, HordeError
 from app.horde.retry import HordeTimeoutError, with_retry
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.translate import chat_to_horde
-from app.log_store import RequestLogEntry
+from app.log_store import RequestLogEntry, estimate_tokens
 from app.schemas.horde import HordeJobStatus
 from app.schemas.openai import (
     ChatChoice,
@@ -41,7 +41,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
     # Resolve model alias → real Horde model name
     try:
-        models = await horde.get_models()
+        models = await horde.get_enriched_models()
         real_model = await model_router.resolve(body.model, models, config=config)
     except ModelNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -91,14 +91,20 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         raise _horde_error(e)
 
     gen = status.generations[0] if status.generations else None
+    response_text = gen.text if gen else ""
+    input_tokens = sum(
+        estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
+    )
     request.state.log_extras = {
         "model": body.model,
         "real_model": real_model,
         "messages": log_messages,
         "worker": gen.worker_name or "" if gen else "",
         "worker_id": gen.worker_id or "" if gen else "",
-        "kudos": gen.kudos or 0.0 if gen else 0.0,
-        "response_text": gen.text if gen else "",
+        "kudos": status.kudos or 0.0,
+        "response_text": response_text,
+        "input_tokens": input_tokens,
+        "output_tokens": estimate_tokens(response_text),
     }
     return _build_response(status, body.model, real_model)
 
@@ -174,7 +180,7 @@ async def _stream_chat(
         response_text = gen.text
         worker_name = gen.worker_name or ""
         worker_id = gen.worker_id or ""
-        kudos = gen.kudos or 0.0
+        kudos = status.kudos or 0.0
         # Use the actual model Horde assigned (may differ from alias like "best")
         actual_model = gen.model or real_model
 
@@ -234,6 +240,11 @@ async def _stream_chat(
                     messages=log_messages,
                     response_text=response_text,
                     error=error_msg,
+                    input_tokens=sum(
+                        estimate_tokens(str(m.get("content", "")))
+                        for m in (log_messages or [])
+                    ),
+                    output_tokens=estimate_tokens(response_text),
                 )
                 request_log = getattr(request.app.state, "request_log", None)
                 if request_log is not None:

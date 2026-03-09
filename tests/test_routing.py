@@ -98,30 +98,27 @@ async def test_best_with_blocklist():
 
 
 @pytest.mark.asyncio
-async def test_best_falls_back_when_all_filtered():
-    """If all models are filtered out, best/fast fall back to unfiltered list."""
+async def test_best_raises_when_all_filtered():
+    """If all models are filtered out, best raises ModelNotFoundError."""
     config = Settings(
         default_model="aphrodite/llama-3.1-8b",
         model_whitelist=["nonexistent-model"],  # eliminates everything
     )
     router = ModelRouter(config)
-    # Should NOT raise — falls back to unfiltered MODELS
-    result = await router.resolve("best", MODELS)
-    # Falls back to unfiltered best = llama-3.1-8b (count=5)
-    assert result == "aphrodite/llama-3.1-8b"
+    with pytest.raises(ModelNotFoundError):
+        await router.resolve("best", MODELS)
 
 
 @pytest.mark.asyncio
-async def test_fast_falls_back_when_all_filtered():
-    """fast falls back to unfiltered list when filters eliminate everything."""
+async def test_fast_raises_when_all_filtered():
+    """If all models are filtered out, fast raises ModelNotFoundError."""
     config = Settings(
         default_model="aphrodite/llama-3.1-8b",
         model_blocklist=["aphrodite", "koboldcpp"],  # eliminates everything
     )
     router = ModelRouter(config)
-    result = await router.resolve("fast", MODELS)
-    # Falls back to unfiltered — mistral-nemo has lowest (queued=1, eta=5)
-    assert result == "koboldcpp/mistral-nemo-12b"
+    with pytest.raises(ModelNotFoundError):
+        await router.resolve("fast", MODELS)
 
 
 @pytest.mark.asyncio

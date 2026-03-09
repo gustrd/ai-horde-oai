@@ -7,6 +7,7 @@ from app.horde.retry import HordeTimeoutError, with_retry
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.translate import completion_to_horde
 from app.routers.chat import _horde_error
+from app.log_store import estimate_tokens
 from app.schemas.horde import HordeJobStatus
 from app.schemas.openai import CompletionChoice, CompletionRequest, CompletionResponse, Usage
 
@@ -26,7 +27,7 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
         )
 
     try:
-        models = await horde.get_models()
+        models = await horde.get_enriched_models()
         real_model = await model_router.resolve(body.model, models, config=config)
     except ModelNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -63,14 +64,18 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
         raise _horde_error(e)
 
     gen = status.generations[0] if status.generations else None
+    prompt_str = body.prompt if isinstance(body.prompt, str) else str(body.prompt)
+    response_text = gen.text if gen else ""
     request.state.log_extras = {
         "model": body.model,
         "real_model": real_model,
-        "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
+        "prompt": prompt_str,
         "worker": gen.worker_name or "" if gen else "",
         "worker_id": gen.worker_id or "" if gen else "",
-        "kudos": gen.kudos or 0.0 if gen else 0.0,
-        "response_text": gen.text if gen else "",
+        "kudos": status.kudos or 0.0,
+        "response_text": response_text,
+        "input_tokens": estimate_tokens(prompt_str),
+        "output_tokens": estimate_tokens(response_text),
     }
 
     choices = [
