@@ -9,7 +9,7 @@ import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import Settings, load_config
+from app.config import CONFIG_PATH, Settings, load_config
 from app.horde.client import HordeClient
 from app.horde.routing import ModelRouter
 from app.routers import chat, completions, images, models
@@ -50,6 +50,19 @@ def create_app(config: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def reload_config_if_changed(request: Request, call_next) -> Response:
+        """Reload config from disk when the YAML file has been modified (e.g. by TUI)."""
+        try:
+            if CONFIG_PATH.exists():
+                mtime = CONFIG_PATH.stat().st_mtime
+                if mtime > getattr(app.state, "_config_mtime", 0.0):
+                    app.state.config = load_config()
+                    app.state._config_mtime = mtime
+        except Exception:
+            pass
+        return await call_next(request)
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:

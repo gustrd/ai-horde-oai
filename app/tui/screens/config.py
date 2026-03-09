@@ -90,6 +90,9 @@ class ConfigScreen(Screen):
                 yield Label("Min Context Length:", classes="field-label")
                 yield Input(id="field-min-context", classes="field-input")
             with Horizontal(classes="field-row"):
+                yield Label("Min Max Tokens:", classes="field-label")
+                yield Input(id="field-min-max-tokens", classes="field-input")
+            with Horizontal(classes="field-row"):
                 yield Label("Model Whitelist:", classes="field-label")
                 yield Input(id="field-whitelist", placeholder="comma-separated", classes="field-input")
             with Horizontal(classes="field-row"):
@@ -121,6 +124,7 @@ class ConfigScreen(Screen):
         self.query_one("#field-port", Input).value = str(cfg.port)
         self.query_one("#field-default-model", Input).value = cfg.default_model
         self.query_one("#field-min-context", Input).value = str(cfg.model_min_context)
+        self.query_one("#field-min-max-tokens", Input).value = str(cfg.model_min_max_length)
         self.query_one("#field-whitelist", Input).value = ",".join(cfg.model_whitelist)
         self.query_one("#field-blocklist", Input).value = ",".join(cfg.model_blocklist)
         self.query_one("#field-max-retries", Input).value = str(cfg.retry.max_retries)
@@ -139,6 +143,7 @@ class ConfigScreen(Screen):
         try:
             port = int(self.query_one("#field-port", Input).value)
             min_ctx = int(self.query_one("#field-min-context", Input).value or "0")
+            min_max_tokens = int(self.query_one("#field-min-max-tokens", Input).value or "0")
             max_retries = int(self.query_one("#field-max-retries", Input).value or "2")
             timeout = int(self.query_one("#field-timeout", Input).value or "300")
         except ValueError as e:
@@ -161,6 +166,7 @@ class ConfigScreen(Screen):
             "port": port,
             "default_model": self.query_one("#field-default-model", Input).value,
             "model_min_context": min_ctx,
+            "model_min_max_length": min_max_tokens,
             "model_whitelist": [s.strip() for s in whitelist_str.split(",") if s.strip()],
             "model_blocklist": [s.strip() for s in blocklist_str.split(",") if s.strip()],
             "retry": new_retry,
