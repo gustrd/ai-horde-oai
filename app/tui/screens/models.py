@@ -81,9 +81,35 @@ class ModelsScreen(Screen):
             pass
 
     async def _load_models(self) -> None:
+        import asyncio
         try:
             horde = self.app.horde
-            models = await horde.get_models(type="text")
+            models_task = asyncio.create_task(horde.get_models(type="text"))
+            workers_task = asyncio.create_task(horde.get_text_workers())
+            models, workers = await asyncio.gather(models_task, workers_task)
+
+            # Aggregate max context/length per model name from workers
+            ctx_map: dict[str, int] = {}
+            len_map: dict[str, int] = {}
+            for w in workers:
+                if not w.get("online"):
+                    continue
+                max_ctx = w.get("max_context_length", 0)
+                max_len = w.get("max_length", 0)
+                for model_name in w.get("models", []):
+                    if max_ctx > ctx_map.get(model_name, 0):
+                        ctx_map[model_name] = max_ctx
+                    if max_len > len_map.get(model_name, 0):
+                        len_map[model_name] = max_len
+
+            models = [
+                m.model_copy(update={
+                    "max_context_length": ctx_map.get(m.name, m.max_context_length),
+                    "max_length": len_map.get(m.name, m.max_length),
+                })
+                for m in models
+            ]
+
             cfg = self.app.config
             from app.horde.filters import filter_models
             filtered = filter_models(

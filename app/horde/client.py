@@ -48,6 +48,10 @@ class HordeClient:
         r = self._check(await self.http.get("/v2/status/models", params={"type": type}))
         return [HordeModel(**m) for m in r.json()]
 
+    async def get_text_workers(self) -> list[dict]:
+        r = self._check(await self.http.get("/v2/workers", params={"type": "text"}))
+        return r.json()
+
     async def get_user(self) -> HordeUser:
         r = self._check(await self.http.get("/v2/find_user"))
         return HordeUser(**r.json())
