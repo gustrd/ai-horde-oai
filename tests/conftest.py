@@ -76,6 +76,7 @@ async def client(app):
         base_url=config.horde_api_url,
         api_key=config.horde_api_key,
         client_agent=config.client_agent,
+        model_cache_ttl=config.model_cache_ttl,
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)

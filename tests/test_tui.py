@@ -475,46 +475,70 @@ async def test_models_to_chat_propagation():
 @pytest.mark.asyncio
 async def test_chat_history_saving(tmp_path):
     """ChatScreen saves history to JSON on successful response."""
-    import json
-    from pathlib import Path
-    
+    import json as json_mod
+
     config = make_config()
     app = HordeApp(config=config)
-    
-    # Mock httpx response
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": "Hello! I am an AI."}}],
-        "usage": {"total_tokens": 10}
-    }
-    
-    # Path is now at module level in chat.py
+
+    # Build a fake SSE streaming response for httpx client.stream()
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def aread(self):
+            return b""
+
+        def aiter_lines(self):
+            return self._gen()
+
+        async def _gen(self):
+            content_chunk = json_mod.dumps({
+                "choices": [{"delta": {"content": "Hello! I am an AI."}, "finish_reason": None}],
+                "id": "x", "object": "chat.completion.chunk", "created": 1, "model": "test",
+            })
+            yield f"data: {content_chunk}"
+            final_chunk = json_mod.dumps({
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "id": "x", "object": "chat.completion.chunk", "created": 1, "model": "test",
+            })
+            yield f"data: {final_chunk}"
+            yield "data: [DONE]"
+
+    fake_response = FakeStreamResponse()
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=fake_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=stream_cm)
+
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+
     with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
          patch("app.tui.screens.chat.Path") as mock_path, \
-         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-        
+         patch("httpx.AsyncClient", return_value=client_cm):
+
         mock_path.home.return_value = tmp_path
-        mock_post.return_value = mock_resp
-        
+
         async with app.run_test() as pilot:
             screen = ChatScreen()
             await app.push_screen(screen)
             await pilot.pause()
-            
+
             # Set a model
             select = screen.query_one("#model-select", Select)
             select.set_options([("test", "test")])
             select.value = "test"
-            
+
             # Send message
             inp = screen.query_one("#message-input", Input)
             inp.value = "hi"
             await pilot.click("#send-btn")
-            
+
             # Wait for request to finish
             await pilot.pause(0.5)
-            
+
             # Check if file was created in tmp_path / .ai-horde-oai / history
             history_dir = tmp_path / ".ai-horde-oai" / "history"
             assert history_dir.exists()

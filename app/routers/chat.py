@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -47,7 +48,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
     if body.stream:
         return StreamingResponse(
-            _stream_chat(horde, horde_req, body.model, real_model),
+            _stream_chat(horde, horde_req, body.model, real_model, config.stream_stall_timeout),
             media_type="text/event-stream",
         )
 
@@ -60,6 +61,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             max_retries=config.retry.max_retries,
             timeout_seconds=config.retry.timeout_seconds,
             broaden_on_retry=config.retry.broaden_on_retry,
+            backoff_base=config.retry.backoff_base,
         )
     except HordeTimeoutError as e:
         raise HTTPException(status_code=504, detail=str(e))
@@ -74,6 +76,7 @@ async def _stream_chat(
     horde_req,
     alias: str,
     real_model: str,
+    stall_timeout: int = 120,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -92,7 +95,15 @@ async def _stream_chat(
     try:
         job_id = await horde.submit_text_job(horde_req)
 
+        last_progress = time.monotonic()
+        last_queue_pos: int | None = None
+
         while True:
+            # Check stall timeout — no progress (queue movement) for too long
+            if time.monotonic() - last_progress > stall_timeout:
+                yield "data: [DONE]\n\n"
+                return
+
             status = await horde.poll_text_status(job_id)
 
             if status.done and status.generations:
@@ -102,19 +113,23 @@ async def _stream_chat(
                 yield "data: [DONE]\n\n"
                 return
 
+            # Track progress: queue position changing counts as progress
+            if status.queue_position != last_queue_pos:
+                last_progress = time.monotonic()
+                last_queue_pos = status.queue_position
+
             # Emit SSE comment with queue position
             if status.queue_position is not None:
                 yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
 
-            import asyncio
             await asyncio.sleep(2)
 
         text = status.generations[0].text
 
-        # Stream the text word by word
-        words = text.split(" ")
-        for i, word in enumerate(words):
-            chunk_text = word + (" " if i < len(words) - 1 else "")
+        # Stream the text in small chunks (character groups) to simulate token streaming
+        chunk_size = 4
+        for i in range(0, len(text), chunk_size):
+            chunk_text = text[i:i + chunk_size]
             chunk = StreamChunk(
                 id=completion_id,
                 created=created,

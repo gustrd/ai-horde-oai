@@ -23,8 +23,9 @@ def chat_to_horde(
     """Translate an OpenAI ChatCompletionRequest to a HordeTextRequest."""
     prompt = messages_to_prompt(request.messages, real_model)
 
+    cap = config.max_max_tokens
     params = HordeTextParams(
-        max_length=max(16, min(request.max_tokens or 512, 512)),
+        max_length=max(16, min(request.max_tokens or cap, cap)),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,
@@ -59,8 +60,9 @@ def completion_to_horde(
     """Translate an OpenAI CompletionRequest to a HordeTextRequest."""
     prompt = request.prompt if isinstance(request.prompt, str) else request.prompt[0]
 
+    cap = config.max_max_tokens
     params = HordeTextParams(
-        max_length=max(16, min(request.max_tokens or 512, 512)),
+        max_length=max(16, min(request.max_tokens or cap, cap)),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,

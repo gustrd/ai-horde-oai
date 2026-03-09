@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import httpx
 
 from app.schemas.horde import (
@@ -20,8 +22,18 @@ class HordeError(Exception):
 
 
 class HordeClient:
-    def __init__(self, base_url: str, api_key: str, client_agent: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        client_agent: str,
+        timeout: float = 30.0,
+        model_cache_ttl: int = 60,
+    ):
         self.api_key = api_key
+        self._model_cache_ttl = model_cache_ttl
+        self._model_cache: list[HordeModel] = []
+        self._model_cache_expires: float = 0.0
         self.http = httpx.AsyncClient(
             base_url=base_url,
             headers={
@@ -45,8 +57,19 @@ class HordeClient:
         return response
 
     async def get_models(self, type: str = "text") -> list[HordeModel]:
+        """Fetch available models, using a TTL cache to avoid hammering the API."""
+        now = time.monotonic()
+        if self._model_cache and now < self._model_cache_expires:
+            return self._model_cache
         r = self._check(await self.http.get("/v2/status/models", params={"type": type}))
-        return [HordeModel(**m) for m in r.json()]
+        models = [HordeModel(**m) for m in r.json()]
+        self._model_cache = models
+        self._model_cache_expires = now + self._model_cache_ttl
+        return models
+
+    def invalidate_model_cache(self) -> None:
+        """Force the next get_models() call to fetch fresh data."""
+        self._model_cache_expires = 0.0
 
     async def get_text_workers(self) -> list[dict]:
         r = self._check(await self.http.get("/v2/workers", params={"type": "text"}))
