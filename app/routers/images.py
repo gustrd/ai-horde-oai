@@ -31,9 +31,27 @@ async def image_generations(request: Request, body: ImageGenerationRequest) -> I
             backoff_base=config.retry.backoff_base,
         )
     except HordeTimeoutError as e:
+        request.state.log_extras = {
+            "model": real_model,
+            "real_model": real_model,
+            "prompt": body.prompt,
+            "error": str(e),
+        }
         raise HTTPException(status_code=504, detail=str(e))
     except HordeError as e:
+        request.state.log_extras = {
+            "model": real_model,
+            "real_model": real_model,
+            "prompt": body.prompt,
+            "error": e.message,
+        }
         raise _horde_error(e)
+
+    request.state.log_extras = {
+        "model": real_model,
+        "real_model": real_model,
+        "prompt": body.prompt,
+    }
 
     images: list[ImageData] = []
     for gen in status.generations:

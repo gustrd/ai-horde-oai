@@ -13,7 +13,6 @@ from app.tui.screens.dashboard import DashboardScreen
 from app.tui.screens.config import ConfigScreen
 from app.tui.screens.chat import ChatScreen
 from app.tui.screens.models import ModelsScreen
-from app.tui.screens.history import HistoryScreen
 from app.tui.screens.logs import LogsScreen
 from app.tui.widgets.kudos_bar import KudosBar
 from app.tui.widgets.model_table import ModelTable
@@ -776,8 +775,3 @@ async def test_chat_actual_model_shown_in_status(tmp_path):
             assert "aphrodite/resolved-model-8b" in text
             # Worker name should appear in status
             assert "MyWorkerNode" in text
-
-            # Log entry should record actual model and worker
-            assert len(app.request_log) == 1
-            assert app.request_log[0].model == "aphrodite/resolved-model-8b"
-            assert app.request_log[0].worker == "MyWorkerNode"

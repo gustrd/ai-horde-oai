@@ -19,7 +19,6 @@ class DashboardScreen(Screen):
         ("m", "switch_screen('models')", "Mod"),
         ("c", "switch_screen('chat')", "Chat"),
         ("l", "switch_screen('logs')", "Log"),
-        ("h", "switch_screen('history')", "Hist"),
         ("q", "quit", "Quit"),
     ]
 

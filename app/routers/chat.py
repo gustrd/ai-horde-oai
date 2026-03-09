@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -13,6 +14,7 @@ from app.horde.client import HordeClient, HordeError
 from app.horde.retry import HordeTimeoutError, with_retry
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.translate import chat_to_horde
+from app.log_store import RequestLogEntry
 from app.schemas.horde import HordeJobStatus
 from app.schemas.openai import (
     ChatChoice,
@@ -34,6 +36,9 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     model_router: ModelRouter = request.app.state.model_router
     config = request.app.state.config
 
+    # Capture request body for logging
+    log_messages = [m.model_dump() for m in body.messages]
+
     # Resolve model alias → real Horde model name
     try:
         models = await horde.get_models()
@@ -47,8 +52,13 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     horde_req = chat_to_horde(body, real_model, config)
 
     if body.stream:
+        # Streaming: generator logs the entry when the stream ends
+        request.state.log_extras = {"_streaming": True}
         return StreamingResponse(
-            _stream_chat(horde, horde_req, body.model, real_model, config.stream_stall_timeout),
+            _stream_chat(
+                horde, horde_req, body.model, real_model,
+                config.stream_stall_timeout, request, log_messages,
+            ),
             media_type="text/event-stream",
         )
 
@@ -64,10 +74,32 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             backoff_base=config.retry.backoff_base,
         )
     except HordeTimeoutError as e:
+        request.state.log_extras = {
+            "model": body.model,
+            "real_model": real_model,
+            "messages": log_messages,
+            "error": str(e),
+        }
         raise HTTPException(status_code=504, detail=str(e))
     except HordeError as e:
+        request.state.log_extras = {
+            "model": body.model,
+            "real_model": real_model,
+            "messages": log_messages,
+            "error": e.message,
+        }
         raise _horde_error(e)
 
+    gen = status.generations[0] if status.generations else None
+    request.state.log_extras = {
+        "model": body.model,
+        "real_model": real_model,
+        "messages": log_messages,
+        "worker": gen.worker_name or "" if gen else "",
+        "worker_id": gen.worker_id or "" if gen else "",
+        "kudos": gen.kudos or 0.0 if gen else 0.0,
+        "response_text": gen.text if gen else "",
+    }
     return _build_response(status, body.model, real_model)
 
 
@@ -77,9 +109,12 @@ async def _stream_chat(
     alias: str,
     real_model: str,
     stall_timeout: int = 120,
+    request: Request | None = None,
+    log_messages: list | None = None,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
+    gen_start = time.monotonic()
 
     # Send the initial role chunk
     first_chunk = StreamChunk(
@@ -92,6 +127,13 @@ async def _stream_chat(
 
     # Submit job and poll with queue position comments
     job_id: str | None = None
+    worker_name = ""
+    worker_id = ""
+    kudos = 0.0
+    response_text = ""
+    status_code = 200
+    error_msg = ""
+
     try:
         job_id = await horde.submit_text_job(horde_req)
 
@@ -129,14 +171,17 @@ async def _stream_chat(
             await asyncio.sleep(2)
 
         gen = status.generations[0]
-        text = gen.text
+        response_text = gen.text
+        worker_name = gen.worker_name or ""
+        worker_id = gen.worker_id or ""
+        kudos = gen.kudos or 0.0
         # Use the actual model Horde assigned (may differ from alias like "best")
         actual_model = gen.model or real_model
 
         # Stream the text in small chunks (character groups) to simulate token streaming
         chunk_size = 4
-        for i in range(0, len(text), chunk_size):
-            chunk_text = text[i:i + chunk_size]
+        for i in range(0, len(response_text), chunk_size):
+            chunk_text = response_text[i:i + chunk_size]
             chunk = StreamChunk(
                 id=completion_id,
                 created=created,
@@ -148,10 +193,10 @@ async def _stream_chat(
         # Emit worker metadata as an SSE comment before closing
         yield (
             f": x-horde-worker"
-            f" name={gen.worker_name}"
-            f" id={gen.worker_id}"
+            f" name={worker_name}"
+            f" id={worker_id}"
             f" model={actual_model}"
-            f" kudos={gen.kudos:.1f}\n\n"
+            f" kudos={kudos:.1f}\n\n"
         )
 
         # Final chunk with finish_reason
@@ -164,10 +209,40 @@ async def _stream_chat(
         yield f"data: {final.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
 
-    except Exception:
+    except Exception as exc:
+        error_msg = str(exc) or type(exc).__name__
+        status_code = 500
         if job_id:
             await horde.cancel_text_job(job_id)
         yield "data: [DONE]\n\n"
+
+    finally:
+        # Log the completed streaming request
+        if request is not None:
+            try:
+                entry = RequestLogEntry(
+                    timestamp=datetime.now(),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    status=status_code,
+                    duration=time.monotonic() - gen_start,
+                    model=alias,
+                    real_model=real_model,
+                    worker=worker_name,
+                    worker_id=worker_id,
+                    kudos=kudos,
+                    messages=log_messages,
+                    response_text=response_text,
+                    error=error_msg,
+                )
+                request_log = getattr(request.app.state, "request_log", None)
+                if request_log is not None:
+                    request_log.append(entry)
+                log_callback = getattr(request.app.state, "log_callback", None)
+                if log_callback is not None:
+                    log_callback(entry)
+            except Exception:
+                pass
 
 
 def _build_response(

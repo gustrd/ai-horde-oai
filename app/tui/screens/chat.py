@@ -14,7 +14,6 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, Select, TextArea
 
 from app.tui.widgets.chat_view import ChatMessage, ChatView
-from app.tui.screens.logs import RequestLogEntry
 
 
 class ChatScreen(Screen):
@@ -27,7 +26,6 @@ class ChatScreen(Screen):
         ("m", "switch_screen('models')", "Mod"),
         ("c", "switch_screen('chat')", "Chat"),
         ("l", "switch_screen('logs')", "Log"),
-        ("h", "switch_screen('history')", "Hist"),
         ("q", "quit", "Quit"),
         ("ctrl+l", "clear", "Clr"),
     ]
@@ -172,7 +170,6 @@ class ChatScreen(Screen):
 
         start = time.monotonic()
         connect_host = "127.0.0.1" if cfg.host == "0.0.0.0" else cfg.host
-        status_code = 0
         content_parts: list[str] = []
         actual_model: str = str(model)
         worker_name: str = ""
@@ -185,7 +182,6 @@ class ChatScreen(Screen):
                     f"http://{connect_host}:{cfg.port}/v1/chat/completions",
                     json={"model": model, "messages": messages, "stream": True},
                 ) as r:
-                    status_code = r.status_code
                     if r.status_code != 200:
                         body = await r.aread()
                         self.query_one("#status", Label).update(
@@ -293,29 +289,7 @@ class ChatScreen(Screen):
                 self.query_one("#status", Label).update("Error: empty response")
 
         except Exception as e:
-            msg = str(e) or type(e).__name__
-            self.query_one("#status", Label).update(f"Error: {msg}")
-
-        finally:
-            entry = RequestLogEntry(
-                timestamp=datetime.now(),
-                method="POST",
-                path="/v1/chat/completions",
-                status=status_code,
-                duration=time.monotonic() - start,
-                model=actual_model,
-                worker=worker_name,
-            )
-            self.app.request_log.append(entry)
-            # Live-update logs screen if it's currently active
-            try:
-                from app.tui.screens.logs import LogsScreen
-                for _s in self.app.screen_stack:
-                    if isinstance(_s, LogsScreen):
-                        _s.add_entry(entry)
-                        break
-            except Exception:
-                pass
+            self.query_one("#status", Label).update(f"Error: {str(e) or type(e).__name__}")
 
     def _save_history(self, model: str, worker_name: str, kudos: float) -> None:
         history_dir = Path.home() / ".ai-horde-oai" / "history"

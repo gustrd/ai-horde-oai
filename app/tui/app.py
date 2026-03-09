@@ -1,16 +1,18 @@
 """Main Textual application for ai-horde-oai TUI."""
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import App, ComposeResult
 from textual.widgets import Label
 
 from app.config import Settings, load_config, save_config
 from app.horde.client import HordeClient
+from app.log_store import RequestLogEntry
 from app.tui.screens.chat import ChatScreen
 from app.tui.screens.config import ConfigScreen
 from app.tui.screens.dashboard import DashboardScreen
-from app.tui.screens.history import HistoryScreen
-from app.tui.screens.logs import LogsScreen, RequestLogEntry
+from app.tui.screens.logs import LogsScreen
 from app.tui.screens.models import ModelsScreen
 from app.tui.screens.welcome import WelcomeScreen
 
@@ -40,7 +42,6 @@ class HordeApp(App):
         "models": ModelsScreen,
         "chat": ChatScreen,
         "logs": LogsScreen,
-        "history": HistoryScreen,
     }
 
     BINDINGS = [
@@ -49,11 +50,10 @@ class HordeApp(App):
         ("m", "switch_screen('models')", "Mod"),
         ("c", "switch_screen('chat')", "Chat"),
         ("l", "switch_screen('logs')", "Log"),
-        ("h", "switch_screen('history')", "Hist"),
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, config: Settings | None = None, **kwargs):
+    def __init__(self, config: Settings | None = None, start_server: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.config: Settings = config or load_config()
         self.horde: HordeClient | None = None
@@ -62,6 +62,9 @@ class HordeApp(App):
         # Model counts updated by ModelsScreen after each load
         self.model_count: int = 0
         self.model_total: int = 0
+        self._start_server = start_server
+        self._uv_server = None
+        self._server_task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         # Placeholder; screens handle their own layouts
@@ -74,15 +77,53 @@ class HordeApp(App):
             client_agent=self.config.client_agent,
         )
 
+        if self._start_server:
+            await self._launch_server()
+
         # Show welcome if this is the first run (default anon key)
         if self.config.horde_api_key == "0000000000":
             self.push_screen("welcome")
         else:
             self.push_screen("dashboard")
 
+    async def _launch_server(self) -> None:
+        """Start the FastAPI server as an in-process asyncio task."""
+        import uvicorn
+
+        from app.main import create_app
+
+        fastapi_app = create_app(self.config)
+        # Share the TUI's request_log and notify callback with the FastAPI app
+        fastapi_app.state.request_log = self.request_log
+        fastapi_app.state.log_callback = self._notify_logs
+
+        uv_config = uvicorn.Config(
+            app=fastapi_app,
+            host=self.config.host,
+            port=self.config.port,
+            log_config=None,
+            install_signal_handlers=False,
+        )
+        self._uv_server = uvicorn.Server(uv_config)
+        self._server_task = asyncio.create_task(self._uv_server.serve())
+
+    def _notify_logs(self, entry: RequestLogEntry) -> None:
+        """Called by FastAPI middleware when a new log entry is created."""
+        for screen in self.screen_stack:
+            if isinstance(screen, LogsScreen):
+                screen.add_entry(entry)
+                break
+
     async def on_unmount(self) -> None:
         if self.horde:
             await self.horde.close()
+        if self._uv_server is not None:
+            self._uv_server.should_exit = True
+        if self._server_task is not None:
+            try:
+                await asyncio.wait_for(self._server_task, timeout=3.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
 
     # -----------------------------------------------------------------
     # Welcome screen events
@@ -124,7 +165,7 @@ class HordeApp(App):
 
 
 def cli() -> None:
-    app = HordeApp()
+    app = HordeApp(start_server=True)
     app.run()
 
 

@@ -46,9 +46,32 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
             backoff_base=config.retry.backoff_base,
         )
     except HordeTimeoutError as e:
+        request.state.log_extras = {
+            "model": body.model,
+            "real_model": real_model,
+            "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
+            "error": str(e),
+        }
         raise HTTPException(status_code=504, detail=str(e))
     except HordeError as e:
+        request.state.log_extras = {
+            "model": body.model,
+            "real_model": real_model,
+            "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
+            "error": e.message,
+        }
         raise _horde_error(e)
+
+    gen = status.generations[0] if status.generations else None
+    request.state.log_extras = {
+        "model": body.model,
+        "real_model": real_model,
+        "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
+        "worker": gen.worker_name or "" if gen else "",
+        "worker_id": gen.worker_id or "" if gen else "",
+        "kudos": gen.kudos or 0.0 if gen else 0.0,
+        "response_text": gen.text if gen else "",
+    }
 
     choices = [
         CompletionChoice(index=i, text=gen.text, finish_reason="stop")
