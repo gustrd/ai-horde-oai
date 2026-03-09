@@ -8,9 +8,23 @@ from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant", "tool"]
-    content: str | None = None
+    role: Literal["system", "user", "assistant", "tool", "developer"]
+    content: str | list[Any] | None = None
     name: str | None = None
+
+    def content_as_str(self) -> str | None:
+        if self.content is None:
+            return None
+        if isinstance(self.content, str):
+            return self.content
+        # Extract text from content parts (OpenAI multimodal format)
+        parts = []
+        for part in self.content:
+            if isinstance(part, dict):
+                parts.append(part.get("text") or "")
+            elif hasattr(part, "text"):
+                parts.append(part.text or "")
+        return "".join(p for p in parts if p)
 
 
 class ChatCompletionRequest(BaseModel):

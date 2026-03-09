@@ -95,6 +95,10 @@ async def _stream_chat(
     try:
         job_id = await horde.submit_text_job(horde_req)
 
+        # Tell the client which model was actually resolved (alias → real name)
+        if real_model != alias:
+            yield f": x-horde-resolved model={real_model}\n\n"
+
         last_progress = time.monotonic()
         last_queue_pos: int | None = None
 

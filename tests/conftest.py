@@ -13,6 +13,15 @@ from app.main import create_app
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path, monkeypatch):
+    """Prevent tests from reading/writing the real user config."""
+    import app.config as _cfg
+
+    monkeypatch.setattr(_cfg, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(_cfg, "CONFIG_PATH", tmp_path / "config.yaml")
+
+
 def load_fixture(name: str):
     return json.loads((FIXTURES / name).read_text())
 

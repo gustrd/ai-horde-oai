@@ -49,7 +49,7 @@ def render_messages(messages: list[ChatMessage], template_name: str = "chatml") 
     system_content: str | None = None
 
     for msg in messages:
-        content = msg.content or ""
+        content = msg.content_as_str() or ""
         if msg.role == "system":
             if tmpl["system"] is None:
                 # Mistral: prepend system to first user message

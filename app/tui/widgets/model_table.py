@@ -96,9 +96,16 @@ class ModelTable(Widget):
         key_fn, reverse = _COLUMNS[self._sort_col][1], self._sort_reverse
         sorted_models = sorted(self._displayed, key=key_fn, reverse=reverse)
 
+        default_model: str | None = None
+        try:
+            default_model = self.app.config.default_model
+        except Exception:
+            pass
+
         table = self.query_one(DataTable)
         table.clear()
-        for m in sorted_models:
+        default_row_idx: int | None = None
+        for idx, m in enumerate(sorted_models):
             eta_str = f"{m.eta}s" if m.eta else "-"
             name = textwrap.fill(m.name, width=_NAME_WRAP)
             table.add_row(
@@ -110,6 +117,11 @@ class ModelTable(Widget):
                 name,
                 key=m.name,  # key stays original (used for model selection)
             )
+            if m.name == default_model:
+                default_row_idx = idx
+
+        if default_row_idx is not None:
+            table.move_cursor(row=default_row_idx)
 
     def set_models(
         self,

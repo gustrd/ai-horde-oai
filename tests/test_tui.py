@@ -317,7 +317,7 @@ async def test_config_screen_save():
     app = HordeApp(config=config)
 
     with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
-         patch("app.tui.screens.config.save_config") as mock_save:
+         patch("app.config.save_config") as mock_save:
         async with app.run_test() as pilot:
             await app.push_screen(ConfigScreen())
             await pilot.pause()

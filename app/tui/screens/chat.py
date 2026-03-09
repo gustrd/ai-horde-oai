@@ -208,7 +208,11 @@ class ChatScreen(Screen):
                                 f"(total elapsed: {elapsed_s:.0f}s)"
                             )
 
-                        if line.startswith(": x-horde-worker"):
+                        if line.startswith(": x-horde-resolved"):
+                            m = re.search(r"model=(\S+)", line)
+                            if m:
+                                actual_model = m.group(1)
+                        elif line.startswith(": x-horde-worker"):
                             # Parse: x-horde-worker name=... id=... model=... kudos=...
                             m = re.search(r"name=(\S+)", line)
                             if m:
@@ -237,8 +241,9 @@ class ChatScreen(Screen):
                                 if first_pos is None:
                                     first_pos = pos
                                     first_pos_time = time.monotonic()
+                                model_label = f"{actual_model} — " if actual_model != str(model) else ""
                                 self.query_one("#status", Label).update(
-                                    f"Queued — pos={pos}, {eta_str}, elapsed={elapsed_s:.0f}s"
+                                    f"Queued — {model_label}pos={pos}, {eta_str}, elapsed={elapsed_s:.0f}s"
                                 )
                             else:
                                 self.query_one("#status", Label).update(f"Queued — {line[2:]}")

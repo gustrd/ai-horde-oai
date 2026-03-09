@@ -57,7 +57,9 @@ class Settings(BaseModel):
     image_defaults: ImageDefaults = Field(default_factory=ImageDefaults)
 
 
-def load_config(path: Path = CONFIG_PATH) -> Settings:
+def load_config(path: Path | None = None) -> Settings:
+    if path is None:
+        path = CONFIG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data: dict[str, Any] = {}
@@ -80,7 +82,9 @@ def load_config(path: Path = CONFIG_PATH) -> Settings:
     return Settings(**data)
 
 
-def save_config(settings: Settings, path: Path = CONFIG_PATH) -> None:
+def save_config(settings: Settings, path: Path | None = None) -> None:
+    if path is None:
+        path = CONFIG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump(settings.model_dump(), f, default_flow_style=False)
