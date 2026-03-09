@@ -53,7 +53,7 @@ class Settings(BaseModel):
 
 
 def load_config(path: Path = CONFIG_PATH) -> Settings:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     data: dict[str, Any] = {}
     if path.exists():
@@ -76,6 +76,6 @@ def load_config(path: Path = CONFIG_PATH) -> Settings:
 
 
 def save_config(settings: Settings, path: Path = CONFIG_PATH) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump(settings.model_dump(), f, default_flow_style=False)
