@@ -27,7 +27,7 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
 
     try:
         models = await horde.get_models()
-        real_model = await model_router.resolve(body.model, models)
+        real_model = await model_router.resolve(body.model, models, config=config)
     except ModelNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except HordeError as e:

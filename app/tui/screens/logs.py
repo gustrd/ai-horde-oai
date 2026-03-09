@@ -16,6 +16,8 @@ class RequestLogEntry:
     path: str
     status: int
     duration: float
+    model: str = ""
+    worker: str = ""
 
 
 class LogsScreen(Screen):
@@ -52,10 +54,16 @@ class LogsScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Time", "Method", "Path", "Status", "Duration")
-        # Load existing entries from the app log
+        table.add_columns("Time", "Method", "Path", "Status", "Duration", "Model", "Worker")
         for entry in self.app.request_log:
             self._add_row(entry)
+
+    def on_screen_resume(self) -> None:
+        """Sync any entries added while this screen was not active."""
+        table = self.query_one(DataTable)
+        if table.row_count < len(self.app.request_log):
+            for entry in self.app.request_log[table.row_count:]:
+                self._add_row(entry)
 
     def _add_row(self, entry: RequestLogEntry) -> None:
         table = self.query_one(DataTable)
@@ -65,6 +73,8 @@ class LogsScreen(Screen):
             entry.path,
             str(entry.status),
             f"{entry.duration:.2f}s",
+            entry.model,
+            entry.worker,
         )
         self.query_one("#info", Label).update(f"{table.row_count} requests logged")
 

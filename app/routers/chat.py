@@ -37,7 +37,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     # Resolve model alias → real Horde model name
     try:
         models = await horde.get_models()
-        real_model = await model_router.resolve(body.model, models)
+        real_model = await model_router.resolve(body.model, models, config=config)
     except ModelNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except HordeError as e:
@@ -124,7 +124,10 @@ async def _stream_chat(
 
             await asyncio.sleep(2)
 
-        text = status.generations[0].text
+        gen = status.generations[0]
+        text = gen.text
+        # Use the actual model Horde assigned (may differ from alias like "best")
+        actual_model = gen.model or real_model
 
         # Stream the text in small chunks (character groups) to simulate token streaming
         chunk_size = 4
@@ -133,16 +136,25 @@ async def _stream_chat(
             chunk = StreamChunk(
                 id=completion_id,
                 created=created,
-                model=alias,
+                model=actual_model,
                 choices=[StreamChoice(index=0, delta=StreamDelta(content=chunk_text), finish_reason=None)],
             )
             yield f"data: {chunk.model_dump_json()}\n\n"
+
+        # Emit worker metadata as an SSE comment before closing
+        yield (
+            f": x-horde-worker"
+            f" name={gen.worker_name}"
+            f" id={gen.worker_id}"
+            f" model={actual_model}"
+            f" kudos={gen.kudos:.1f}\n\n"
+        )
 
         # Final chunk with finish_reason
         final = StreamChunk(
             id=completion_id,
             created=created,
-            model=alias,
+            model=actual_model,
             choices=[StreamChoice(index=0, delta=StreamDelta(), finish_reason="stop")],
         )
         yield f"data: {final.model_dump_json()}\n\n"

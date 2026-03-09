@@ -15,46 +15,52 @@ class ModelRouter:
     def __init__(self, config: Settings):
         self.config = config
 
-    def _apply_filters(self, models: list[HordeModel]) -> list[HordeModel]:
+    def _apply_filters(self, models: list[HordeModel], config: Settings) -> list[HordeModel]:
         return filter_models(
             models,
-            whitelist=self.config.model_whitelist or None,
-            blocklist=self.config.model_blocklist or None,
-            min_context=self.config.model_min_context,
-            min_max_length=self.config.model_min_max_length,
+            whitelist=config.model_whitelist or None,
+            blocklist=config.model_blocklist or None,
+            min_context=config.model_min_context,
+            min_max_length=config.model_min_max_length,
         )
 
-    def _pick_best(self, models: list[HordeModel]) -> str:
-        """Pick model with most workers (highest availability)."""
-        filtered = self._apply_filters(models)
-        if not filtered:
-            raise ModelNotFoundError("No models available after filtering for 'best'")
-        return max(filtered, key=lambda m: m.count).name
+    def _pick_best(self, models: list[HordeModel], config: Settings) -> str:
+        """Pick model with most workers. Falls back to unfiltered if all filtered out."""
+        filtered = self._apply_filters(models, config)
+        candidates = filtered or models  # graceful fallback if filters eliminate everything
+        if not candidates:
+            raise ModelNotFoundError("No text models available from Horde")
+        return max(candidates, key=lambda m: m.count).name
 
-    def _pick_fast(self, models: list[HordeModel]) -> str:
-        """Pick model with lowest ETA / queue."""
-        filtered = self._apply_filters(models)
-        if not filtered:
-            raise ModelNotFoundError("No models available after filtering for 'fast'")
-        return min(filtered, key=lambda m: (m.queued, m.eta)).name
+    def _pick_fast(self, models: list[HordeModel], config: Settings) -> str:
+        """Pick model with lowest ETA. Falls back to unfiltered if all filtered out."""
+        filtered = self._apply_filters(models, config)
+        candidates = filtered or models
+        if not candidates:
+            raise ModelNotFoundError("No text models available from Horde")
+        return min(candidates, key=lambda m: (m.queued, m.eta)).name
 
-    async def resolve(self, alias: str, models: list[HordeModel]) -> str:
-        """Resolve a dummy alias to a real Horde model name."""
+    async def resolve(self, alias: str, models: list[HordeModel], config: Settings | None = None) -> str:
+        """Resolve a dummy alias to a real Horde model name.
+
+        config: use this instead of self.config (allows per-request config).
+        """
+        cfg = config if config is not None else self.config
+
         if alias == "best":
-            return self._pick_best(models)
+            return self._pick_best(models, cfg)
         if alias == "fast":
-            return self._pick_fast(models)
+            return self._pick_fast(models, cfg)
 
         # Check user-defined aliases
-        if alias in self.config.model_aliases:
-            return self.config.model_aliases[alias]
+        if alias in cfg.model_aliases:
+            return cfg.model_aliases[alias]
 
         # Check "default" alias
         if alias == "default":
-            if self.config.default_model:
-                return self.config.default_model
-            # Fall back to "best" if no default configured
-            return self._pick_best(models)
+            if cfg.default_model:
+                return cfg.default_model
+            return self._pick_best(models, cfg)
 
         # Unknown alias — pass through as-is (may be a direct Horde model name)
         return alias

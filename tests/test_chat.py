@@ -201,6 +201,54 @@ async def test_chat_completions_streaming(client):
     assert "data: [DONE]" in lines
 
 
+async def test_streaming_worker_comment_emitted(client):
+    """SSE stream includes x-horde-worker comment with worker name, id, model, kudos."""
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "best",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "stream": True,
+        },
+    ) as response:
+        lines = [l async for l in response.aiter_lines()]
+
+    worker_lines = [l for l in lines if l.startswith(": x-horde-worker")]
+    assert len(worker_lines) == 1, f"Expected 1 worker comment, got: {worker_lines}"
+
+    wl = worker_lines[0]
+    # Fixture has worker_name=gpu-node-7, worker_id=worker-abc-123, kudos=15.0
+    assert "gpu-node-7" in wl
+    assert "worker-abc-123" in wl
+    assert "15.0" in wl
+
+
+async def test_streaming_chunks_use_actual_model(client):
+    """Content chunks carry actual Horde model name, not the alias."""
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "best",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+        },
+    ) as response:
+        lines = [l async for l in response.aiter_lines()]
+
+    content_chunks = [
+        json.loads(l[6:])
+        for l in lines
+        if l.startswith("data: ") and l != "data: [DONE]"
+        and json.loads(l[6:])["choices"][0]["delta"].get("content")
+    ]
+    assert content_chunks, "Expected at least one content chunk"
+    # All content chunks should carry the real model from the fixture
+    fixture_model = GENERATE_FIXTURE["generations"][0]["model"]
+    assert all(c["model"] == fixture_model for c in content_chunks)
+
+
 async def test_health_endpoint(client):
     """Health endpoint returns ok."""
     response = await client.get("/health")
