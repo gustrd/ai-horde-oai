@@ -3,9 +3,18 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
-from app.schemas.horde import HordeJobStatus
+
+@runtime_checkable
+class HordeStatusLike(Protocol):
+    """Protocol satisfied by both HordeJobStatus and HordeImageStatus."""
+    done: bool
+    faulted: bool
+    generations: list[Any]
+
+
+StatusT = TypeVar("StatusT", bound=HordeStatusLike)
 
 
 class HordeTimeoutError(Exception):
@@ -18,16 +27,20 @@ class HordeJobFailed(Exception):
 
 async def with_retry(
     submit_fn: Callable[[], Coroutine[Any, Any, str]],
-    poll_fn: Callable[[str], Coroutine[Any, Any, HordeJobStatus]],
+    poll_fn: Callable[[str], Coroutine[Any, Any, StatusT]],
     cancel_fn: Callable[[str], Coroutine[Any, Any, None]],
     max_retries: int = 2,
     timeout_seconds: int = 300,
     broaden_on_retry: bool = True,
+    backoff_base: float = 2.0,
     on_broaden: Callable[[], None] | None = None,
-    on_status: Callable[[HordeJobStatus], None] | None = None,
+    on_status: Callable[[Any], None] | None = None,
     poll_interval: float = 2.0,
-) -> HordeJobStatus:
-    """Submit a Horde job with auto-retry and timeout.
+) -> StatusT:
+    """Submit a Horde job with auto-retry, exponential backoff, and timeout.
+
+    Works with both text (HordeJobStatus) and image (HordeImageStatus) jobs
+    as long as they share the done/faulted/generations fields.
 
     Args:
         submit_fn: Async function that submits a job and returns its ID.
@@ -36,12 +49,13 @@ async def with_retry(
         max_retries: Number of additional attempts after the first.
         timeout_seconds: Per-attempt timeout.
         broaden_on_retry: Call on_broaden before each retry.
+        backoff_base: Initial backoff delay in seconds (doubles each retry).
         on_broaden: Optional callback to relax filters before retry.
         on_status: Optional callback called with each status update.
         poll_interval: Seconds between polls.
 
     Returns:
-        Completed HordeJobStatus with at least one generation.
+        Completed status object with at least one generation.
 
     Raises:
         HordeTimeoutError: All attempts exhausted without a result.
@@ -49,8 +63,13 @@ async def with_retry(
     last_exc: Exception | None = None
 
     for attempt in range(1 + max_retries):
-        if attempt > 0 and broaden_on_retry and on_broaden:
-            on_broaden()
+        if attempt > 0:
+            # Exponential backoff before retrying
+            backoff = backoff_base * (2 ** (attempt - 1))
+            await asyncio.sleep(backoff)
+
+            if broaden_on_retry and on_broaden:
+                on_broaden()
 
         job_id: str | None = None
         try:

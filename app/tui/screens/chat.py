@@ -174,6 +174,10 @@ class ChatScreen(Screen):
         connect_host = "127.0.0.1" if cfg.host == "0.0.0.0" else cfg.host
         status_code = 0
         content_parts: list[str] = []
+        actual_model: str = str(model)
+        worker_name: str = ""
+        worker_id: str = ""
+        kudos_spent: float = 0.0
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None)) as client:
                 async with client.stream(
@@ -204,7 +208,18 @@ class ChatScreen(Screen):
                                 f"(total elapsed: {elapsed_s:.0f}s)"
                             )
 
-                        if line.startswith(": queue_position="):
+                        if line.startswith(": x-horde-worker"):
+                            # Parse: x-horde-worker name=... id=... model=... kudos=...
+                            m = re.search(r"name=(\S+)", line)
+                            if m:
+                                worker_name = m.group(1)
+                            m = re.search(r"id=(\S+)", line)
+                            if m:
+                                worker_id = m.group(1)
+                            m = re.search(r"kudos=([\d.]+)", line)
+                            if m:
+                                kudos_spent = float(m.group(1))
+                        elif line.startswith(": queue_position="):
                             m = re.search(r"queue_position=(\d+).*eta=(\d+)", line)
                             if m:
                                 pos = int(m.group(1))
@@ -231,6 +246,9 @@ class ChatScreen(Screen):
                             chunk = line[6:]
                             try:
                                 delta = json.loads(chunk)
+                                # Capture actual model name (Horde resolves aliases like "best")
+                                if delta.get("model"):
+                                    actual_model = delta["model"]
                                 text = (
                                     delta.get("choices", [{}])[0]
                                     .get("delta", {})
@@ -248,12 +266,24 @@ class ChatScreen(Screen):
                 reply = ChatMessage(
                     role="assistant",
                     content=content,
-                    metadata={"elapsed": elapsed},
+                    metadata={
+                        "elapsed": elapsed,
+                        "model": actual_model,
+                        "worker_name": worker_name,
+                        "worker_id": worker_id,
+                        "kudos": kudos_spent,
+                    },
                 )
                 self._history.append(reply)
                 self.query_one(ChatView).add_message(reply)
-                self.query_one("#status", Label).update(f"Done — {elapsed:.1f}s")
-                self._save_history(model, 0)
+
+                parts = [f"Done — {elapsed:.1f}s"]
+                if actual_model and actual_model != str(model):
+                    parts.append(f"model: {actual_model}")
+                if worker_name:
+                    parts.append(f"worker: {worker_name}")
+                self.query_one("#status", Label).update(" · ".join(parts))
+                self._save_history(actual_model, worker_name, kudos_spent)
             else:
                 self.query_one("#status", Label).update("Error: empty response")
 
@@ -268,34 +298,39 @@ class ChatScreen(Screen):
                 path="/v1/chat/completions",
                 status=status_code,
                 duration=time.monotonic() - start,
+                model=actual_model,
+                worker=worker_name,
             )
             self.app.request_log.append(entry)
+            # Live-update logs screen if it's currently active
             try:
                 from app.tui.screens.logs import LogsScreen
-                logs_screen = self.app.get_screen("logs")
-                if isinstance(logs_screen, LogsScreen):
-                    logs_screen.add_entry(entry)
+                for _s in self.app.screen_stack:
+                    if isinstance(_s, LogsScreen):
+                        _s.add_entry(entry)
+                        break
             except Exception:
                 pass
 
-    def _save_history(self, model: str, tokens: int) -> None:
+    def _save_history(self, model: str, worker_name: str, kudos: float) -> None:
         history_dir = Path.home() / ".ai-horde-oai" / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"chat_{timestamp}.json"
-        
+
         data = {
             "date": datetime.now().isoformat(),
             "model": model,
+            "worker": worker_name,
+            "kudos_spent": kudos,
             "message_count": len(self._history),
-            "kudos_spent": 0, # We don't have this info easily here
             "messages": [
                 {"role": m.role, "content": m.content, "metadata": m.metadata}
                 for m in self._history
-            ]
+            ],
         }
-        
+
         (history_dir / filename).write_text(json.dumps(data, indent=2))
 
     def action_clear(self) -> None:

@@ -54,7 +54,15 @@ class DashboardScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._sync_from_app()
         self._refresh_labels()
+
+    def on_screen_resume(self) -> None:
+        self._sync_from_app()
+
+    def _sync_from_app(self) -> None:
+        self.models_count = getattr(self.app, "model_count", 0)
+        self.total_models = getattr(self.app, "model_total", 0)
 
     def _refresh_labels(self) -> None:
         config = self.app.config
@@ -64,7 +72,7 @@ class DashboardScreen(Screen):
         masked = f"****{config.horde_api_key[-4:]}" if len(config.horde_api_key) > 4 else "****"
         self.query_one("#api-key-status", Label).update(f"API Key: {masked}")
         self.query_one("#model-stats", Label).update(
-            f"Models loaded: {self.models_count} (filtered from {self.total_models})"
+            f"Models: {self.models_count} shown / {self.total_models} total"
         )
         self.query_one("#request-stats", Label).update(
             f"Requests this session: {self.request_count}"

@@ -134,7 +134,7 @@ class ConfigScreen(Screen):
             self.app.switch_screen("dashboard")
 
     def action_save(self) -> None:
-        from app.config import RetrySettings, Settings, save_config
+        from app.config import RetrySettings, save_config
 
         try:
             port = int(self.query_one("#field-port", Input).value)
@@ -148,21 +148,23 @@ class ConfigScreen(Screen):
         whitelist_str = self.query_one("#field-whitelist", Input).value
         blocklist_str = self.query_one("#field-blocklist", Input).value
 
-        new_config = Settings(
-            horde_api_key=self.query_one("#field-api-key", Input).value,
-            horde_api_url=self.query_one("#field-api-url", Input).value,
-            host=self.query_one("#field-host", Input).value,
-            port=port,
-            default_model=self.query_one("#field-default-model", Input).value,
-            model_min_context=min_ctx,
-            model_whitelist=[s.strip() for s in whitelist_str.split(",") if s.strip()],
-            model_blocklist=[s.strip() for s in blocklist_str.split(",") if s.strip()],
-            retry=RetrySettings(
-                max_retries=max_retries,
-                timeout_seconds=timeout,
-                broaden_on_retry=self.query_one("#field-broaden", Switch).value,
-            ),
-        )
+        # Use model_copy so fields not present in this form are preserved
+        new_retry = self.app.config.retry.model_copy(update={
+            "max_retries": max_retries,
+            "timeout_seconds": timeout,
+            "broaden_on_retry": self.query_one("#field-broaden", Switch).value,
+        })
+        new_config = self.app.config.model_copy(update={
+            "horde_api_key": self.query_one("#field-api-key", Input).value,
+            "horde_api_url": self.query_one("#field-api-url", Input).value,
+            "host": self.query_one("#field-host", Input).value,
+            "port": port,
+            "default_model": self.query_one("#field-default-model", Input).value,
+            "model_min_context": min_ctx,
+            "model_whitelist": [s.strip() for s in whitelist_str.split(",") if s.strip()],
+            "model_blocklist": [s.strip() for s in blocklist_str.split(",") if s.strip()],
+            "retry": new_retry,
+        })
         save_config(new_config)
         self.app.config = new_config
         self.query_one("#status", Label).update(

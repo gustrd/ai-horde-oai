@@ -59,6 +59,9 @@ class HordeApp(App):
         self.horde: HordeClient | None = None
         self.request_log: list[RequestLogEntry] = []
         self.selected_model: str | None = None
+        # Model counts updated by ModelsScreen after each load
+        self.model_count: int = 0
+        self.model_total: int = 0
 
     def compose(self) -> ComposeResult:
         # Placeholder; screens handle their own layouts

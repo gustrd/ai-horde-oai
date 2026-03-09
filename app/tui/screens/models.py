@@ -41,17 +41,81 @@ class ModelsScreen(Screen):
         yield Header()
         yield Label("Loading models...", id="info", markup=False)
         yield ModelTable(id="model-table-widget")
-        yield Label("Tip: Press Enter on a model to select it for Chat.", id="tip", classes="stat-row", markup=False)
+        yield Label("Tip: Press Enter on a model to set it as default and open Chat.", id="tip", classes="stat-row", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
         self.run_worker(self._load_models(), exclusive=True)
 
+    def on_screen_resume(self) -> None:
+        """Re-apply config filters whenever the screen comes back into focus."""
+        cfg = self.app.config
+        try:
+            widget = self.query_one(ModelTable)
+            widget.update_filters(
+                whitelist=cfg.model_whitelist or None,
+                blocklist=cfg.model_blocklist or None,
+                min_context=cfg.model_min_context,
+                min_max_length=cfg.model_min_max_length,
+            )
+            shown = len(widget.displayed_models)
+            total = len(widget.all_models)
+            self.query_one("#info", Label).update(f"{shown} of {total} models")
+        except Exception:
+            pass
+
+    def on_input_changed(self, event) -> None:
+        """Update info label when the filter input changes."""
+        widget = self.query_one(ModelTable)
+        total = len(widget.all_models)
+        shown = len(widget.displayed_models)
+        q = event.value.strip()
+        if q:
+            self.query_one("#info", Label).update(
+                f"{shown} of {total} models (search: '{q}')"
+            )
+        else:
+            self.query_one("#info", Label).update(
+                f"{shown} of {total} models"
+            )
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # Get the model name from the row key
         model_name = str(event.row_key.value)
+
+        # Guard: verify model still passes current config filters
+        from app.horde.filters import filter_models as _filter
+        widget = self.query_one(ModelTable)
+        model_obj = next((m for m in widget.all_models if m.name == model_name), None)
+        if model_obj is not None:
+            cfg = self.app.config
+            allowed = _filter(
+                [model_obj],
+                whitelist=cfg.model_whitelist or None,
+                blocklist=cfg.model_blocklist or None,
+                min_context=cfg.model_min_context,
+                min_max_length=cfg.model_min_max_length,
+            )
+            if not allowed:
+                self.notify(
+                    f"'{model_name}' is excluded by current filter settings.",
+                    title="Model Blocked",
+                    severity="warning",
+                )
+                return
+
         self.app.selected_model = model_name
-        
+
+        # Persist as default_model in config
+        from app.config import save_config
+        self.app.config = self.app.config.model_copy(update={"default_model": model_name})
+        try:
+            save_config(self.app.config)
+        except Exception:
+            pass
+
+        self.notify(f"Default model set to: {model_name}", title="Model Selected")
+
         # Switch to chat first
         self.app.switch_screen("chat")
         
@@ -111,19 +175,21 @@ class ModelsScreen(Screen):
             ]
 
             cfg = self.app.config
-            from app.horde.filters import filter_models
-            filtered = filter_models(
+            widget = self.query_one(ModelTable)
+            widget.set_models(
                 models,
-                whitelist=cfg.model_whitelist,
-                blocklist=cfg.model_blocklist,
+                whitelist=cfg.model_whitelist or None,
+                blocklist=cfg.model_blocklist or None,
                 min_context=cfg.model_min_context,
                 min_max_length=cfg.model_min_max_length,
             )
-            widget = self.query_one(ModelTable)
-            widget.set_models(filtered)
-            self.query_one("#info", Label).update(
-                f"{len(filtered)} models shown (from {len(models)} total)"
-            )
+            shown = len(widget.displayed_models)
+            total = len(models)
+            self.query_one("#info", Label).update(f"{shown} of {total} models")
+
+            # Store on app so dashboard can read it whenever it's visible
+            self.app.model_count = shown
+            self.app.model_total = total
         except Exception as e:
             self.query_one("#info", Label).update(f"Error: {e}")
 

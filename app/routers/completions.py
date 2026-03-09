@@ -19,9 +19,15 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
     model_router: ModelRouter = request.app.state.model_router
     config = request.app.state.config
 
+    if body.stream:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"type": "invalid_request_error", "message": "Streaming is not supported for /v1/completions. Use /v1/chat/completions with stream=true instead."}},
+        )
+
     try:
         models = await horde.get_models()
-        real_model = await model_router.resolve(body.model, models)
+        real_model = await model_router.resolve(body.model, models, config=config)
     except ModelNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except HordeError as e:
@@ -37,6 +43,7 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
             max_retries=config.retry.max_retries,
             timeout_seconds=config.retry.timeout_seconds,
             broaden_on_retry=config.retry.broaden_on_retry,
+            backoff_base=config.retry.backoff_base,
         )
     except HordeTimeoutError as e:
         raise HTTPException(status_code=504, detail=str(e))

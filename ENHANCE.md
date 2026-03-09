@@ -1,0 +1,201 @@
+# Code Review: ai-horde-oai
+
+**Date:** 2026-03-08 (updated)
+**Reviewer:** Claude Opus 4.6
+**Overall Quality:** 8/10 — clean architecture, good async patterns, solid test coverage
+
+---
+
+## Status Legend
+
+- FIXED — implemented and tested
+- PARTIAL — partially done, work remains
+- OPEN — not yet addressed
+
+---
+
+## Critical Issues
+
+### 1. Image endpoint has no retry logic — FIXED
+**File:** `app/routers/images.py`
+Now uses `with_retry()` with `broaden_on_retry=False`, `backoff_base` from config.
+
+### 2. SSE streaming has no per-message timeout — FIXED
+**File:** `app/routers/chat.py`
+Tracks `last_progress` timestamp; aborts if no queue position change within `stream_stall_timeout` seconds (configurable, default 120s).
+
+### 3. No integration tests for endpoints — FIXED
+**Files:** `tests/test_chat.py`, `tests/test_completions.py`, `tests/test_models.py`, `tests/test_images.py`
+Full endpoint tests with `httpx.AsyncClient` + `respx` mocks: basic happy path, error codes (401, 429, 500→502, 504), streaming, model aliases.
+
+### 4. b64_json response format for images — PARTIAL
+**File:** `app/routers/images.py`
+Works when Horde returns inline base64 (`r2=False`). Does NOT download from R2 CDN URL and encode. Current workaround: code sets `r2=True` and assumes Horde returns base64 directly when `response_format="b64_json"`.
+
+---
+
+## Moderate Issues
+
+### 5. Max tokens hard-capped to 512 — FIXED
+**File:** `app/config.py` → `max_max_tokens: int = 512`
+Now configurable via `config.yaml`. `chat_to_horde()` and `completion_to_horde()` use `config.max_max_tokens`.
+
+### 6. No exponential backoff in retry logic — FIXED
+**File:** `app/horde/retry.py`
+`backoff_base * (2 ** (attempt - 1))` before each retry. Default 2.0s → 2s, 4s, 8s. Tested in `test_retry.py`.
+
+### 7. Model list not cached — FIXED
+**File:** `app/horde/client.py`
+TTL cache (`model_cache_ttl: 60` configurable). `invalidate_model_cache()` for forced refresh. Tested in `test_client.py`.
+
+### 8. No request logging middleware — FIXED
+**File:** `app/main.py`
+HTTP middleware logs: `POST /v1/chat/completions → 200 (150ms)`. Uses Python `logging` module.
+
+### 9. Streaming chunking is imprecise — PARTIAL
+**File:** `app/routers/chat.py`
+Changed from word-split to 4-char groups. Better but still not token-aligned. Acceptable for a polling-based proxy.
+
+### 10. Select widget handling in chat screen is fragile — OPEN
+**File:** `app/tui/screens/chat.py`
+Multiple conditional checks for `Select.BLANK`, `None`, `hasattr(Select, "NULL")`. Works but could be cleaner.
+
+---
+
+## Minor Issues / Polish
+
+### 11. No `/v1/completions` streaming support — FIXED
+**File:** `app/routers/completions.py`
+Explicitly rejects `stream=true` with HTTP 400 and clear error message (`invalid_request_error`, "streaming not supported").
+
+### 12. CORS allows all origins — FIXED
+**File:** `app/config.py` → `cors_origins: list[str] = ["*"]`
+Configurable via config. `app/main.py` reads from `config.cors_origins`.
+
+### 13. History saved even on error — OPEN
+**File:** `app/tui/screens/chat.py`
+`_save_history()` is only called when `content` is non-empty, but an error mid-response could still save partial data.
+
+### 14. TUI file I/O on mount can block — PARTIAL
+**Files:** `app/tui/screens/models.py`, `app/tui/screens/history.py`
+Models screen uses `run_worker()` for async loading. History screen may still block on file reads.
+
+### 15. No validation that model aliases point to real models — OPEN
+**File:** `app/tui/screens/config.py`
+Config editor accepts any alias target without validation.
+
+### 16. Template detection is substring-based — OPEN
+**File:** `app/horde/templates.py`
+`"llama-3" in name` could match future model names incorrectly. Low risk but imprecise.
+
+### 17. No error path tests — FIXED
+**Files:** `tests/test_chat.py`, `tests/test_completions.py`, `tests/test_images.py`
+Tests cover: Horde 401→401, 429→429, 500→502, timeout→504, faulted→504.
+
+### 18. Worker filter fields inconsistent naming — OPEN
+Config uses `worker_blocklist` but Horde API uses `worker_blacklist`. Works correctly, needs a code comment.
+
+---
+
+## Recent Fixes (this session)
+
+### 19. Config save drops unrelated settings — FIXED
+**File:** `app/tui/screens/config.py`
+`action_save` now uses `model_copy(update={...})` instead of creating a new `Settings(...)`, preserving `model_aliases`, `image_defaults`, `max_max_tokens`, `model_min_max_length`, `cors_origins`, etc.
+
+### 20. Dashboard model count always shows 0 — FIXED
+**Files:** `app/tui/app.py`, `app/tui/screens/models.py`, `app/tui/screens/dashboard.py`
+`ModelsScreen._load_models()` stores counts on `app.model_count`/`app.model_total`. Dashboard reads them via `on_screen_resume()`.
+
+### 21. ModelRouter uses stale startup config — FIXED
+**File:** `app/horde/routing.py`
+`resolve()` now accepts `config` parameter. Chat and completions routers pass `request.app.state.config` at request time. Best/fast fall back to unfiltered list if filters eliminate everything.
+
+### 22. "best"/"fast" 404 when filters too strict — FIXED
+**File:** `app/horde/routing.py`
+`_pick_best()` and `_pick_fast()` now fall back to unfiltered model list when settings filters eliminate all models. Only raises `ModelNotFoundError` when Horde returns zero models.
+
+### 23. No actual model / worker info in chat — FIXED
+**Files:** `app/routers/chat.py`, `app/tui/screens/chat.py`
+SSE stream now includes `x-horde-worker` comment with `name=`, `id=`, `model=`, `kudos=`. TUI parses this and shows actual model + worker in status bar, saves to history and request log.
+
+### 24. Logs screen not live-updating — FIXED
+**File:** `app/tui/screens/logs.py`
+Added `on_screen_resume()` that syncs entries from `app.request_log`. Log table now shows Model and Worker columns.
+
+### 25. ModelTable filters not applied — FIXED
+**Files:** `app/tui/widgets/model_table.py`, `app/tui/screens/models.py`
+Widget owns all filtering (whitelist, blocklist, min_context, min_max_length + text search). Info label updates dynamically. Long model names wrapped at 40 chars.
+
+### 26. Models tab doesn't set default on Enter — FIXED
+**File:** `app/tui/screens/models.py`
+`on_data_table_row_selected` sets `default_model` in config, calls `save_config()`, notifies, switches to Chat. Guard checks model against current filters.
+
+### 27. Config screen doesn't re-apply filters on resume — FIXED
+**File:** `app/tui/screens/models.py`
+`on_screen_resume()` calls `widget.update_filters()` with current config values.
+
+---
+
+## Suggestions for Enhancement
+
+### A. OpenAI-compatible error codes — OPEN
+Return `error.code` field (e.g., `model_not_found`, `context_length_exceeded`).
+
+### B. `/v1/embeddings` stub — OPEN
+Return clear "not supported" error instead of 404.
+
+### C. Health check with Horde status — OPEN
+Extend `/health` to ping Horde, return connectivity + kudos balance.
+
+### D. Configurable max concurrent requests — OPEN
+Add semaphore to prevent overloading Horde.
+
+### E. Model info endpoint — OPEN
+`/v1/models/{model_id}` returning context length, max tokens, capabilities.
+
+### F. Debug request/response body logging — OPEN
+Behind `debug_logging: true` config flag.
+
+### G. Tool/function calling translation — OPEN
+Map OpenAI `tool_choice`/`functions` to Horde prompt formatting.
+
+### H. Prometheus metrics endpoint — OPEN
+`/metrics` with request counts, latencies, queue times, kudos usage.
+
+---
+
+## Test Coverage Summary
+
+| Test File | Tests | Coverage |
+|---|---|---|
+| `test_chat.py` | 11 | Chat endpoint: basic, aliases, system msg, 401, 500→502, 404, timeout, faulted, streaming, worker comment, actual model |
+| `test_completions.py` | 6 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
+| `test_images.py` | 7 | Images: url/b64/default format, submit error, timeout, faulted, timestamp |
+| `test_models.py` | 5 | Models list: fields, get found/not found, real names hidden |
+| `test_routing.py` | 12 | Routing: best/fast/default/alias/passthrough, blocklist, fallback, config passing |
+| `test_filters.py` | 9 | Model/worker filtering |
+| `test_translate.py` | 11 | OpenAI ↔ Horde translation |
+| `test_retry.py` | 9 | Retry: success, image, faulted, timeout, retries, backoff, on_status, empty gens |
+| `test_client.py` | 8 | Client: models, caching, invalidation, errors, cancel, user |
+| `test_config.py` | 5 | Config: load/save/env overrides |
+| `test_tui.py` | ~35 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history |
+| `test_model_table.py` | ~18 | ModelTable: text filter, settings filters, wrapping, screen integration |
+| `test_e2e.py` | 20 | End-to-end integration |
+
+**Total: ~156 tests**
+
+---
+
+## Architecture Strengths
+
+1. **Clean separation of concerns** — client, translate, routing, filters, retry are independent modules
+2. **Pydantic v2 throughout** — strong type safety on all request/response boundaries
+3. **Model alias abstraction** — clients never see real Horde model names
+4. **Smart routing with fallback** — best/fast selection with graceful degradation
+5. **Auto-retry with backoff** — transparent failure recovery
+6. **Async throughout** — httpx, FastAPI, Textual all properly async
+7. **Config layering** — YAML file + env var overrides + sensible defaults
+8. **TUI for setup/testing** — interactive configuration, chat, model browsing, request logs
+9. **Worker attribution** — actual model and worker name visible in status/logs/history
+10. **Live config updates** — router uses per-request config, ModelTable re-applies filters on resume

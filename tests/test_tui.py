@@ -41,6 +41,7 @@ def make_config(**overrides) -> Settings:
 def make_horde_mock(models=None, user=None):
     mock = AsyncMock()
     mock.get_models = AsyncMock(return_value=models or [])
+    mock.get_text_workers = AsyncMock(return_value=[])
     mock.get_user = AsyncMock(return_value=user or HordeUser(username="testuser", kudos=5000))
     mock.close = AsyncMock()
     return mock
@@ -183,6 +184,89 @@ async def test_dashboard_kudos_updates():
             assert screen.query_one(KudosBar).balance == 12450
 
 
+@pytest.mark.asyncio
+async def test_dashboard_model_stats_default_zero():
+    """Dashboard model stats start at 0 before any models are loaded."""
+    config = make_config()
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            info = screen.query_one("#model-stats", Label)
+            assert "0" in str(info.content)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_model_stats_updated_after_models_load():
+    """Dashboard model stats update when returning to dashboard after loading models."""
+    from app.schemas.horde import HordeModel
+
+    models = [
+        HordeModel(name="model-a", max_context_length=4096, max_length=512),
+        HordeModel(name="model-b", max_context_length=4096, max_length=512),
+        HordeModel(name="model-c", max_context_length=4096, max_length=512),
+    ]
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(models=models)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            dash = DashboardScreen()
+            await app.push_screen(dash)
+            await pilot.pause()
+
+            # Switch to models screen (triggers _load_models worker)
+            models_screen = ModelsScreen()
+            await app.push_screen(models_screen)
+            await pilot.pause(0.5)  # wait for worker
+
+            # Switch back to dashboard — on_screen_resume syncs counts
+            await app.switch_screen(dash)
+            await pilot.pause()
+
+            assert dash.models_count == 3
+            assert dash.total_models == 3
+            info = dash.query_one("#model-stats", Label)
+            assert "3" in str(info.content)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_model_stats_reflects_filters():
+    """Dashboard model count reflects filtered (shown) count, not total."""
+    from app.schemas.horde import HordeModel
+
+    models = [
+        HordeModel(name="aphrodite/llama-8b", max_context_length=4096, max_length=512),
+        HordeModel(name="koboldcpp/mistral-7b", max_context_length=4096, max_length=512),
+    ]
+    config = make_config(model_blocklist=["mistral"])
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(models=models)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            dash = DashboardScreen()
+            await app.push_screen(dash)
+            await pilot.pause()
+
+            models_screen = ModelsScreen()
+            await app.push_screen(models_screen)
+            await pilot.pause(0.5)
+
+            # Return to dashboard to trigger on_screen_resume sync
+            await app.switch_screen(dash)
+            await pilot.pause()
+
+            # 1 shown (mistral blocked), 2 total
+            assert dash.models_count == 1
+            assert dash.total_models == 2
+
+
 # ---------------------------------------------------------------------------
 # ConfigScreen tests
 # ---------------------------------------------------------------------------
@@ -250,6 +334,87 @@ async def test_config_screen_save():
         mock_save.assert_called_once()
         saved_config = mock_save.call_args[0][0]
         assert saved_config.port == 7777
+
+
+@pytest.mark.asyncio
+async def test_config_save_preserves_unrelated_fields():
+    """Saving config via the form does not wipe fields not shown in the form."""
+    from app.config import RetrySettings
+    from textual.widgets import Input
+
+    # Config with custom fields not in the form
+    config = make_config(
+        model_aliases={"gpt4": "aphrodite/llama-70b"},
+        max_max_tokens=256,
+        model_min_max_length=128,
+    )
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.config.save_config") as mock_save:
+        async with app.run_test() as pilot:
+            await app.push_screen(ConfigScreen())
+            await pilot.pause()
+
+            # Change only the port, save
+            app.screen.query_one("#field-port", Input).value = "9090"
+            await pilot.click("#save-btn")
+            await pilot.pause()
+
+        mock_save.assert_called_once()
+        saved = mock_save.call_args[0][0]
+        assert saved.port == 9090
+        # Fields not in the form must be preserved
+        assert saved.model_aliases == {"gpt4": "aphrodite/llama-70b"}
+        assert saved.max_max_tokens == 256
+        assert saved.model_min_max_length == 128
+
+
+@pytest.mark.asyncio
+async def test_config_save_parses_whitelist_and_blocklist():
+    """Whitelist and blocklist are parsed from comma-separated input strings."""
+    from textual.widgets import Input
+
+    config = make_config()
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.config.save_config") as mock_save:
+        async with app.run_test() as pilot:
+            await app.push_screen(ConfigScreen())
+            await pilot.pause()
+
+            app.screen.query_one("#field-whitelist", Input).value = "llama, mistral, phi"
+            app.screen.query_one("#field-blocklist", Input).value = "nsfw, uncensored"
+            await pilot.click("#save-btn")
+            await pilot.pause()
+
+        saved = mock_save.call_args[0][0]
+        assert saved.model_whitelist == ["llama", "mistral", "phi"]
+        assert saved.model_blocklist == ["nsfw", "uncensored"]
+
+
+@pytest.mark.asyncio
+async def test_config_save_invalid_port_shows_error():
+    """Non-integer port input shows error, does not save."""
+    from textual.widgets import Input, Label
+
+    config = make_config()
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.config.save_config") as mock_save:
+        async with app.run_test() as pilot:
+            await app.push_screen(ConfigScreen())
+            await pilot.pause()
+
+            app.screen.query_one("#field-port", Input).value = "notaport"
+            await pilot.click("#save-btn")
+            await pilot.pause()
+
+            mock_save.assert_not_called()
+            status = app.screen.query_one("#status", Label)
+            assert "error" in str(status.content).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -475,48 +640,144 @@ async def test_models_to_chat_propagation():
 @pytest.mark.asyncio
 async def test_chat_history_saving(tmp_path):
     """ChatScreen saves history to JSON on successful response."""
-    import json
-    from pathlib import Path
-    
+    import json as json_mod
+
     config = make_config()
     app = HordeApp(config=config)
-    
-    # Mock httpx response
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": "Hello! I am an AI."}}],
-        "usage": {"total_tokens": 10}
-    }
-    
-    # Path is now at module level in chat.py
+
+    # Build a fake SSE streaming response for httpx client.stream()
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def aread(self):
+            return b""
+
+        def aiter_lines(self):
+            return self._gen()
+
+        async def _gen(self):
+            content_chunk = json_mod.dumps({
+                "choices": [{"delta": {"content": "Hello! I am an AI."}, "finish_reason": None}],
+                "id": "x", "object": "chat.completion.chunk", "created": 1, "model": "test",
+            })
+            yield f"data: {content_chunk}"
+            final_chunk = json_mod.dumps({
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "id": "x", "object": "chat.completion.chunk", "created": 1, "model": "test",
+            })
+            yield f"data: {final_chunk}"
+            yield "data: [DONE]"
+
+    fake_response = FakeStreamResponse()
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=fake_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=stream_cm)
+
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+
     with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
          patch("app.tui.screens.chat.Path") as mock_path, \
-         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-        
+         patch("httpx.AsyncClient", return_value=client_cm):
+
         mock_path.home.return_value = tmp_path
-        mock_post.return_value = mock_resp
-        
+
         async with app.run_test() as pilot:
             screen = ChatScreen()
             await app.push_screen(screen)
             await pilot.pause()
-            
+
             # Set a model
             select = screen.query_one("#model-select", Select)
             select.set_options([("test", "test")])
             select.value = "test"
-            
+
             # Send message
             inp = screen.query_one("#message-input", Input)
             inp.value = "hi"
             await pilot.click("#send-btn")
-            
+
             # Wait for request to finish
             await pilot.pause(0.5)
-            
+
             # Check if file was created in tmp_path / .ai-horde-oai / history
             history_dir = tmp_path / ".ai-horde-oai" / "history"
             assert history_dir.exists()
             files = list(history_dir.glob("*.json"))
             assert len(files) > 0
+
+
+@pytest.mark.asyncio
+async def test_chat_actual_model_shown_in_status(tmp_path):
+    """Status bar shows actual model when Horde resolves alias like 'best'."""
+    import json as json_mod
+
+    config = make_config()
+    app = HordeApp(config=config)
+
+    class FakeStreamResponse:
+        status_code = 200
+
+        async def aread(self):
+            return b""
+
+        def aiter_lines(self):
+            return self._gen()
+
+        async def _gen(self):
+            # Horde resolves "best" → actual model name in each chunk
+            content_chunk = json_mod.dumps({
+                "choices": [{"delta": {"content": "Hi!"}, "finish_reason": None}],
+                "id": "x", "object": "chat.completion.chunk", "created": 1,
+                "model": "aphrodite/resolved-model-8b",
+            })
+            yield f"data: {content_chunk}"
+            # Worker metadata SSE comment (emitted by router after text)
+            yield ": x-horde-worker name=MyWorkerNode id=abc-123 model=aphrodite/resolved-model-8b kudos=2.5"
+            yield "data: [DONE]"
+
+    fake_response = FakeStreamResponse()
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=fake_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=stream_cm)
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.tui.screens.chat.Path") as mock_path, \
+         patch("httpx.AsyncClient", return_value=client_cm):
+
+        mock_path.home.return_value = tmp_path
+
+        async with app.run_test() as pilot:
+            screen = ChatScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            select = screen.query_one("#model-select", Select)
+            select.set_options([("best", "best")])
+            select.value = "best"
+
+            inp = screen.query_one("#message-input", Input)
+            inp.value = "hello"
+            await pilot.click("#send-btn")
+            await pilot.pause(0.5)
+
+            status = screen.query_one("#status", Label)
+            text = str(status.content)
+            # Actual resolved model should appear in status
+            assert "aphrodite/resolved-model-8b" in text
+            # Worker name should appear in status
+            assert "MyWorkerNode" in text
+
+            # Log entry should record actual model and worker
+            assert len(app.request_log) == 1
+            assert app.request_log[0].model == "aphrodite/resolved-model-8b"
+            assert app.request_log[0].worker == "MyWorkerNode"
