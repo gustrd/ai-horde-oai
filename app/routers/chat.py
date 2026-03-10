@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -77,45 +80,61 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             media_type="text/event-stream",
         )
 
-    # Non-streaming: submit, poll, return
-    try:
-        status = await with_retry(
-            submit_fn=lambda: horde.submit_text_job(horde_req),
-            poll_fn=horde.poll_text_status,
-            cancel_fn=horde.cancel_text_job,
-            max_retries=config.retry.max_retries,
-            timeout_seconds=config.retry.timeout_seconds,
-            broaden_on_retry=config.retry.broaden_on_retry,
-            backoff_base=config.retry.backoff_base,
-        )
-    except HordeTimeoutError as e:
-        request.state.log_extras = {
-            "model": body.model,
-            "real_model": real_model,
-            "messages": log_messages,
-            "error": str(e),
-        }
-        raise HTTPException(status_code=504, detail=str(e))
-    except HordeError as e:
-        request.state.log_extras = {
-            "model": body.model,
-            "real_model": real_model,
-            "messages": log_messages,
-            "error": e.message,
-        }
-        raise _horde_error(e)
+    # Non-streaming: submit, poll, return (with tool-format retry)
+    _TOOL_FORMAT_MAX_RETRIES = 3
+    gen = None
+    response_text = ""
+    reasoning_content: str | None = None
+    tool_call: ToolCall | None = None
 
-    gen = status.generations[0] if status.generations else None
-    reasoning_content, response_text = _split_thinking(gen.text if gen else "")
+    for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
+        try:
+            status = await with_retry(
+                submit_fn=lambda: horde.submit_text_job(horde_req),
+                poll_fn=horde.poll_text_status,
+                cancel_fn=horde.cancel_text_job,
+                max_retries=config.retry.max_retries,
+                timeout_seconds=config.retry.timeout_seconds,
+                broaden_on_retry=config.retry.broaden_on_retry,
+                backoff_base=config.retry.backoff_base,
+            )
+        except HordeTimeoutError as e:
+            request.state.log_extras = {
+                "model": body.model,
+                "real_model": real_model,
+                "messages": log_messages,
+                "error": str(e),
+            }
+            raise HTTPException(status_code=504, detail=str(e))
+        except HordeError as e:
+            request.state.log_extras = {
+                "model": body.model,
+                "real_model": real_model,
+                "messages": log_messages,
+                "error": e.message,
+            }
+            raise _horde_error(e)
+
+        gen = status.generations[0] if status.generations else None
+        reasoning_content, response_text = _split_thinking(gen.text if gen else "")
+
+        # Tool call detection (non-streaming)
+        tool_call = None
+        if body.tools and body.tool_choice != "none":
+            fmt = detect_tool_format(real_model)
+            tool_call = parse_tool_call(response_text, fmt)
+            if tool_call is None and response_text.lstrip().startswith("<tool_call>"):
+                logger.warning(
+                    "tool call with invalid formatting (attempt %d/%d)",
+                    _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
+                )
+                if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                    continue
+        break
+
     input_tokens = sum(
         estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
     )
-
-    # Tool call detection (non-streaming)
-    tool_call: ToolCall | None = None
-    if body.tools and body.tool_choice != "none":
-        fmt = detect_tool_format(real_model)
-        tool_call = parse_tool_call(response_text, fmt)
 
     request.state.log_extras = {
         "model": body.model,
@@ -168,62 +187,72 @@ async def _stream_chat(
     status_code = 200
     error_msg = ""
 
+    _TOOL_FORMAT_MAX_RETRIES = 3
     try:
-        job_id = await horde.submit_text_job(horde_req)
-
         # Tell the client which model was actually resolved (alias → real name)
         if real_model != alias:
             yield f": x-horde-resolved model={real_model}\n\n"
 
-        last_progress = time.monotonic()
-        last_queue_pos: int | None = None
-
-        while True:
-            # Check stall timeout — no progress (queue movement) for too long
-            if time.monotonic() - last_progress > stall_timeout:
-                yield "data: [DONE]\n\n"
-                return
-
-            status = await horde.poll_text_status(job_id)
-
-            if status.done and status.generations:
-                break
-
-            if status.faulted:
-                yield "data: [DONE]\n\n"
-                return
-
-            # Track progress: queue position changing counts as progress
-            if status.queue_position != last_queue_pos:
-                last_progress = time.monotonic()
-                last_queue_pos = status.queue_position
-
-            # Emit SSE comment with queue position
-            if status.queue_position is not None:
-                yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
-                if request is not None:
-                    _req = getattr(request.state, "active_req", None)
-                    if _req is not None:
-                        _req["queue_pos"] = status.queue_position
-                        _req["eta"] = status.wait_time
-                        refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
-                        if refresh_cb:
-                            refresh_cb()
-
-            await asyncio.sleep(2)
-
-        gen = status.generations[0]
-        reasoning_content, response_text = _split_thinking(gen.text)
-        worker_name = gen.worker_name or ""
-        worker_id = gen.worker_id or ""
-        kudos = status.kudos or 0.0
-        # Use the actual model Horde assigned (may differ from alias like "best")
-        actual_model = gen.model or real_model
-
-        # Tool call detection — parse before streaming
         tool_call: ToolCall | None = None
-        if tools_fmt:
-            tool_call = parse_tool_call(response_text, tools_fmt)
+        for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
+            job_id = await horde.submit_text_job(horde_req)
+
+            last_progress = time.monotonic()
+            last_queue_pos: int | None = None
+
+            while True:
+                # Check stall timeout — no progress (queue movement) for too long
+                if time.monotonic() - last_progress > stall_timeout:
+                    yield "data: [DONE]\n\n"
+                    return
+
+                status = await horde.poll_text_status(job_id)
+
+                if status.done and status.generations:
+                    break
+
+                if status.faulted:
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Track progress: queue position changing counts as progress
+                if status.queue_position != last_queue_pos:
+                    last_progress = time.monotonic()
+                    last_queue_pos = status.queue_position
+
+                # Emit SSE comment with queue position
+                if status.queue_position is not None:
+                    yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
+                    if request is not None:
+                        _req = getattr(request.state, "active_req", None)
+                        if _req is not None:
+                            _req["queue_pos"] = status.queue_position
+                            _req["eta"] = status.wait_time
+                            refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
+                            if refresh_cb:
+                                refresh_cb()
+
+                await asyncio.sleep(2)
+
+            gen = status.generations[0]
+            reasoning_content, response_text = _split_thinking(gen.text)
+            worker_name = gen.worker_name or ""
+            worker_id = gen.worker_id or ""
+            kudos = status.kudos or 0.0
+            # Use the actual model Horde assigned (may differ from alias like "best")
+            actual_model = gen.model or real_model
+
+            # Tool call detection — parse before streaming
+            if tools_fmt:
+                tool_call = parse_tool_call(response_text, tools_fmt)
+                if tool_call is None and response_text.lstrip().startswith("<tool_call>"):
+                    logger.warning(
+                        "tool call with invalid formatting (attempt %d/%d)",
+                        _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
+                    )
+                    if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                        continue
+            break
 
         if tool_call:
             # Emit tool_calls delta chunks (OpenClaw / OpenAI streaming protocol)
