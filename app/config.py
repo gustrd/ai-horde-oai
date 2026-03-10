@@ -37,6 +37,7 @@ class Settings(BaseModel):
     default_max_tokens: int = 2048  # fallback when client doesn't specify max_tokens
     model_cache_ttl: int = 60       # seconds to cache /v2/status/models response
     stream_stall_timeout: int = 120  # seconds without progress before aborting SSE
+    max_concurrent_requests: int = 3  # max simultaneous Horde jobs; 0 = unlimited
 
     # Model alias mapping
     default_model: str = "best"

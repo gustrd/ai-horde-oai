@@ -9,6 +9,7 @@ import pytest
 from app.horde.templates import format_tool_result, format_tools_for_model, messages_to_prompt
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
 from app.horde.translate import chat_to_horde
+from app.main import create_app
 from app.schemas.openai import ChatMessage, Tool, ToolFunction
 from tests.conftest import MODELS_FIXTURE
 
@@ -33,6 +34,35 @@ TOOL_CALL_HERMES_NO_CLOSE = '<tool_call>\n{"name": "get_weather", "arguments": {
 TOOL_CALL_LLAMA3 = '{"name": "get_weather", "parameters": {"city": "Paris"}}'
 TOOL_CALL_LLAMA3_PYTHON_TAG = '<|python_tag|>{"name": "get_weather", "parameters": {"city": "London"}}'
 TOOL_CALL_QWEN_BRACKET = '[TOOL_CALLS]get_weather[ARGS]{"city": "Tokyo"}'
+
+# Plain JSON responses (no <tool_call> wrapper) — fallback format
+# OpenClaw channel format: <|start|>assistant<|channel|>tool {...}<|im_end|>
+TOOL_CALL_OPENCLAW = '<|start|>assistant<|channel|>tool {"name": "get_weather", "arguments": {"city": "Paris"}} <|im_end|>'
+TOOL_CALL_OPENCLAW_MULTILINE = '''\
+<|start|>assistant<|channel|>tool {
+  "name": "read",
+  "arguments": {
+    "path": "/root/.openclaw/workspace/HEARTBEAT.md"
+  }
+}
+<|im_end|>'''
+TOOL_CALL_OPENCLAW_NO_CLOSE = '<|start|>assistant<|channel|>tool {"name": "get_weather", "arguments": {"city": "Tokyo"}}'
+TOOL_CALL_OPENCLAW_WITH_PREAMBLE = 'Reading HEARTBEAT.md.<|channel|>commentary<|message|>Reading HEARTBEAT.md.<|end|><|start|>assistant<|channel|>tool {"name": "read", "arguments": {"path": "/tmp/foo.md"}} <|im_end|>'
+
+TOOL_CALL_JSON_COMPACT = '{"name": "get_weather", "arguments": {"city": "Paris"}}'
+TOOL_CALL_JSON_PRETTY = '''{
+  "name": "web_search",
+  "arguments": {
+    "query": "bolsas de valores hoje",
+    "count": 3,
+    "country": "BR",
+    "language": "pt"
+  }
+}'''
+TOOL_CALL_JSON_PARAMETERS_KEY = '{"name": "get_weather", "parameters": {"city": "Berlin"}}'
+
+# Plain JSON response for a hermes-format model (koboldcpp/mistral-nemo-12b)
+HERMES_JSON_TOOL_RESPONSE = '{"name": "get_weather", "arguments": {"city": "Paris"}}'
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +188,86 @@ def test_parse_tool_call_no_match():
     """Returns None for plain text."""
     assert parse_tool_call("The weather in Paris is sunny today.", "hermes") is None
     assert parse_tool_call("Sure, let me help you.", "llama3") is None
+
+
+def test_parse_tool_call_openclaw_channel():
+    """Parses <|start|>assistant<|channel|>tool {...}<|im_end|> format."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW, "hermes")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
+    assert json.loads(tc.function.arguments)["city"] == "Paris"
+
+
+def test_parse_tool_call_openclaw_channel_multiline():
+    """Parses multi-line JSON in OpenClaw channel format."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW_MULTILINE, "hermes")
+    assert tc is not None
+    assert tc.function.name == "read"
+    assert json.loads(tc.function.arguments)["path"] == "/root/.openclaw/workspace/HEARTBEAT.md"
+
+
+def test_parse_tool_call_openclaw_no_close_tag():
+    """Parses OpenClaw channel format without closing <|im_end|>."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW_NO_CLOSE, "hermes")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
+    assert json.loads(tc.function.arguments)["city"] == "Tokyo"
+
+
+def test_parse_tool_call_openclaw_with_preamble():
+    """Parses OpenClaw channel format with commentary preamble before the tool block."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW_WITH_PREAMBLE, "hermes")
+    assert tc is not None
+    assert tc.function.name == "read"
+    assert json.loads(tc.function.arguments)["path"] == "/tmp/foo.md"
+
+
+def test_parse_tool_call_openclaw_llama3_format():
+    """OpenClaw channel format is parsed regardless of model format hint."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW, "llama3")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
+
+
+def test_parse_tool_call_hermes_plain_json_compact():
+    """Hermes parser falls back to plain JSON when no <tool_call> wrapper present."""
+    tc = parse_tool_call(TOOL_CALL_JSON_COMPACT, "hermes")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
+    args = json.loads(tc.function.arguments)
+    assert args["city"] == "Paris"
+
+
+def test_parse_tool_call_hermes_plain_json_pretty():
+    """Hermes parser handles pretty-printed JSON tool call (multi-line, no wrapper)."""
+    tc = parse_tool_call(TOOL_CALL_JSON_PRETTY, "hermes")
+    assert tc is not None
+    assert tc.function.name == "web_search"
+    args = json.loads(tc.function.arguments)
+    assert args["query"] == "bolsas de valores hoje"
+    assert args["count"] == 3
+    assert args["country"] == "BR"
+
+
+def test_parse_tool_call_hermes_plain_json_parameters_key():
+    """Hermes JSON fallback accepts 'parameters' as alias for 'arguments'."""
+    tc = parse_tool_call(TOOL_CALL_JSON_PARAMETERS_KEY, "hermes")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
+    args = json.loads(tc.function.arguments)
+    assert args["city"] == "Berlin"
+
+
+def test_parse_tool_call_hermes_plain_json_missing_name():
+    """Hermes JSON fallback returns None when JSON has no 'name' field."""
+    assert parse_tool_call('{"arguments": {"city": "Paris"}}', "hermes") is None
+
+
+def test_parse_tool_call_hermes_xml_still_works_after_fallback():
+    """Standard <tool_call> XML format still parses correctly (regression)."""
+    tc = parse_tool_call(TOOL_CALL_HERMES, "hermes")
+    assert tc is not None
+    assert tc.function.name == "get_weather"
 
 
 def test_detect_tool_format_llama3():
@@ -335,6 +445,109 @@ async def test_streaming_emits_tool_calls_delta(app, client, respx_mock):
     assert len(tool_call_chunks) > 0
     tc = tool_call_chunks[0]["choices"][0]["delta"]["tool_calls"][0]
     assert tc["function"]["name"] == "get_weather"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5b: Router — hermes model returning plain JSON (no <tool_call> wrapper)
+# Uses koboldcpp/mistral-nemo-12b which is hermes format
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def hermes_app(mock_horde):
+    from app.config import Settings
+    config = Settings(
+        horde_api_key="test-key-0000",
+        horde_api_url="https://aihorde.net/api",
+        default_model="koboldcpp/mistral-nemo-12b",
+        retry={"max_retries": 1, "timeout_seconds": 10, "broaden_on_retry": False},
+    )
+    return create_app(config)
+
+
+@pytest.fixture
+async def hermes_client(hermes_app):
+    from app.horde.client import HordeClient
+    from app.horde.routing import ModelRouter
+
+    config = hermes_app.state.config
+    horde = HordeClient(
+        base_url=config.horde_api_url,
+        api_key=config.horde_api_key,
+        client_agent=config.client_agent,
+        model_cache_ttl=config.model_cache_ttl,
+    )
+    hermes_app.state.horde = horde
+    hermes_app.state.model_router = ModelRouter(config)
+    transport = httpx.ASGITransport(app=hermes_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    await horde.close()
+
+
+async def test_hermes_plain_json_tool_call_non_streaming(hermes_app, hermes_client, respx_mock):
+    """Hermes model returning plain JSON (no XML wrapper) is parsed as a tool call."""
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={
+            "done": True, "faulted": False, "kudos": 8.0,
+            "generations": [{"text": HERMES_JSON_TOOL_RESPONSE, "model": "koboldcpp/mistral-nemo-12b",
+                             "worker_id": "w2", "worker_name": "worker2", "state": "ok"}],
+        })
+    )
+
+    response = await hermes_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "koboldcpp/mistral-nemo-12b",
+            "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+            "tools": [WEATHER_TOOL],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    choice = data["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
+    tc = choice["message"]["tool_calls"][0]
+    assert tc["function"]["name"] == "get_weather"
+    assert json.loads(tc["function"]["arguments"])["city"] == "Paris"
+
+
+async def test_hermes_plain_json_tool_call_streaming(hermes_app, hermes_client, respx_mock):
+    """Hermes model returning plain JSON emits correct tool_calls delta in SSE stream."""
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={
+            "done": True, "faulted": False, "kudos": 8.0,
+            "generations": [{"text": HERMES_JSON_TOOL_RESPONSE, "model": "koboldcpp/mistral-nemo-12b",
+                             "worker_id": "w2", "worker_name": "worker2", "state": "ok"}],
+        })
+    )
+
+    lines: list[str] = []
+    async with hermes_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "koboldcpp/mistral-nemo-12b",
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            "tools": [WEATHER_TOOL],
+            "stream": True,
+        },
+    ) as response:
+        assert response.status_code == 200
+        async for line in response.aiter_lines():
+            lines.append(line)
+
+    data_chunks = [
+        json.loads(line[6:]) for line in lines
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    tool_call_chunks = [
+        c for c in data_chunks
+        if c["choices"][0]["delta"].get("tool_calls") is not None
+    ]
+    assert len(tool_call_chunks) > 0
+    finish_reasons = [c["choices"][0].get("finish_reason") for c in data_chunks]
+    assert "tool_calls" in finish_reasons
 
 
 async def test_streaming_finish_reason_tool_calls(app, client, respx_mock):

@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Header, Label, Static
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
 
 from app.log_store import RequestLogEntry, save_entries
 
@@ -108,6 +108,147 @@ class LogDetailModal(ModalScreen):
         return "\n".join(lines)
 
 
+class QueueDetailModal(ModalScreen):
+    """Detail view for active in-flight requests, with cancel option."""
+
+    BINDINGS = [("escape", "dismiss", "Close"), ("q", "dismiss", "Close")]
+
+    DEFAULT_CSS = """
+    QueueDetailModal {
+        align: center middle;
+    }
+    QueueDetailModal #queue-container {
+        width: 72;
+        height: auto;
+        max-height: 85%;
+        border: round $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    QueueDetailModal #queue-title {
+        text-style: bold;
+        color: $warning;
+        margin-bottom: 1;
+    }
+    QueueDetailModal .req-info {
+        margin-bottom: 0;
+        color: $text;
+    }
+    QueueDetailModal .cancel-btn {
+        margin-top: 1;
+        margin-bottom: 1;
+        width: 16;
+    }
+    QueueDetailModal #close-btn {
+        margin-top: 1;
+        width: 100%;
+    }
+    """
+
+    def __init__(self, active: list[dict], **kwargs):
+        super().__init__(**kwargs)
+        self._active = list(active)  # snapshot at open time
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="queue-container"):
+            n = len(self._active)
+            yield Label(
+                f"Active Requests ({n})" if n != 1 else "Active Request (1)",
+                id="queue-title",
+            )
+            if not self._active:
+                yield Static("No active requests.", markup=False)
+            for i, req in enumerate(self._active):
+                yield Static(self._req_text(i, req), markup=False, classes="req-info")
+                can_cancel = bool(req.get("cancel_fn") and req.get("job_id"))
+                yield Button(
+                    "Cancel Job" if can_cancel else "Starting…",
+                    id=f"cancel-{i}",
+                    variant="error" if can_cancel else "default",
+                    classes="cancel-btn",
+                    disabled=not can_cancel,
+                )
+            yield Button("Close", id="close-btn", variant="default")
+
+    def _req_text(self, idx: int, req: dict) -> str:
+        lines = [f"── Request {idx + 1} ─────────────────────────────────"]
+        alias = req.get("alias", "")
+        model = req.get("model", "")
+        if alias and alias != model:
+            lines.append(f"  Alias:      {alias}")
+            lines.append(f"  Model:      {model or '(resolving…)'}")
+        else:
+            lines.append(f"  Model:      {model or alias or '(resolving…)'}")
+        lines.append(f"  Path:       {req.get('method', '?')} {req.get('path', '?')}")
+        max_tokens = req.get("max_tokens")
+        if max_tokens:
+            lines.append(f"  Max tokens: {max_tokens}")
+        q = req.get("queue_pos")
+        eta = req.get("eta")
+        if q is not None:
+            line = f"  Queue pos:  {q}"
+            if eta is not None:
+                line += f"   ETA: {eta}s"
+            lines.append(line)
+        else:
+            lines.append("  Status:     pending / submitting")
+        job_id = req.get("job_id")
+        if job_id:
+            lines.append(f"  Job ID:     {job_id}")
+        messages = req.get("messages")
+        if messages:
+            lines.append("")
+            lines.append("── Messages ────────────────────────────────")
+            for msg in messages:
+                role = msg.get("role", "?").upper()
+                content = str(msg.get("content", ""))
+                lines.append(f"  [{role}]")
+                for chunk in (textwrap.wrap(content, 64) if content.strip() else [content]):
+                    lines.append(f"    {chunk}")
+        return "\n".join(lines)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "close-btn":
+            self.dismiss()
+            return
+        if btn_id.startswith("cancel-"):
+            idx = int(btn_id.split("-", 1)[1])
+            if 0 <= idx < len(self._active):
+                req = self._active[idx]
+                cancel_fn = req.get("cancel_fn")
+                job_id = req.get("job_id")
+                if cancel_fn and job_id:
+                    self.app.run_worker(cancel_fn(job_id), exclusive=False)
+                # Optimistically remove from the app's active list for visual feedback
+                try:
+                    self.app.active_requests.remove(req)
+                except (ValueError, AttributeError):
+                    pass
+            self.dismiss()
+
+
+class ActiveQueueBar(Static):
+    """Clickable status bar that shows in-flight requests and opens detail modal on click."""
+
+    DEFAULT_CSS = """
+    ActiveQueueBar {
+        height: 1;
+        padding: 0 1;
+        color: $warning;
+    }
+    ActiveQueueBar:hover {
+        color: $accent;
+        background: $boost;
+    }
+    """
+
+    def on_click(self) -> None:
+        active = getattr(self.app, "active_requests", [])
+        if active:
+            self.app.push_screen(QueueDetailModal(active))
+
+
 class LogsScreen(Screen):
     """Live request log viewer — shows all API requests from all sources."""
 
@@ -132,18 +273,13 @@ class LogsScreen(Screen):
         padding: 0 1;
         color: $text-muted;
     }
-    LogsScreen #active-label {
-        height: 1;
-        padding: 0 1;
-        color: $warning;
-    }
     """
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="log-table", cursor_type="row")
         yield Label("No requests yet.", id="info", markup=False)
-        yield Label("", id="active-label", markup=False)
+        yield ActiveQueueBar("", id="active-queue-bar", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -168,7 +304,7 @@ class LogsScreen(Screen):
                 entry.timestamp.strftime("%H:%M:%S"),
                 str(entry.status),
                 f"{entry.duration:.1f}s",
-                entry.model,
+                (entry.model or "")[:15],
                 f"{entry.kudos:.1f}" if entry.kudos else "—",
                 f"{entry.input_tokens}>{entry.output_tokens}" if (entry.input_tokens or entry.output_tokens) else "—",
                 preview,
@@ -205,9 +341,9 @@ class LogsScreen(Screen):
             save_entries(log)
 
     def update_active(self, active: list[dict]) -> None:
-        label = self.query_one("#active-label", Label)
+        bar = self.query_one("#active-queue-bar", ActiveQueueBar)
         if not active:
-            label.update("")
+            bar.update("")
             return
         parts = []
         for r in active:
@@ -220,7 +356,7 @@ class LogsScreen(Screen):
             else:
                 line = "● pending"
             parts.append(line)
-        label.update("  " + "   ".join(parts))
+        bar.update("  " + "   ".join(parts))
 
     def action_clear(self) -> None:
         self.app.request_log.clear()

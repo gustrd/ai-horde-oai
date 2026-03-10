@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.horde.client import HordeClient, HordeError
@@ -19,17 +21,19 @@ async def image_generations(request: Request, body: ImageGenerationRequest) -> I
 
     real_model = config.image_defaults.model
     horde_req = image_to_horde(body, real_model, config)
+    _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
 
     try:
-        status = await with_retry(
-            submit_fn=lambda: horde.submit_image_job(horde_req),
-            poll_fn=horde.poll_image_status,
-            cancel_fn=horde.cancel_image_job,
-            max_retries=config.retry.max_retries,
-            timeout_seconds=config.retry.timeout_seconds,
-            broaden_on_retry=False,  # no filter broadening for images
-            backoff_base=config.retry.backoff_base,
-        )
+        async with _sem:
+            status = await with_retry(
+                submit_fn=lambda: horde.submit_image_job(horde_req),
+                poll_fn=horde.poll_image_status,
+                cancel_fn=horde.cancel_image_job,
+                max_retries=config.retry.max_retries,
+                timeout_seconds=config.retry.timeout_seconds,
+                broaden_on_retry=False,  # no filter broadening for images
+                backoff_base=config.retry.backoff_base,
+            )
     except HordeTimeoutError as e:
         request.state.log_extras = {
             "model": real_model,

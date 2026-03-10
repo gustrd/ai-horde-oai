@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from app.schemas.openai import ToolCall, ToolCallFunction
+
+logger = logging.getLogger(__name__)
 
 
 def detect_tool_format(model_name: str) -> str:
@@ -20,9 +23,32 @@ def parse_tool_call(text: str, fmt: str) -> ToolCall | None:
     Try to extract a single tool call from model output.
     Returns None if no valid tool call found.
     """
+    # Universal: OpenClaw channel format (any model)
+    result = _parse_openclaw_channel(text)
+    if result is not None:
+        return result
     if fmt == "llama3":
         return _parse_llama3(text)
     return _parse_hermes(text)
+
+
+def _parse_openclaw_channel(text: str) -> ToolCall | None:
+    """Parse <|start|>assistant<|channel|>tool {...}<|im_end|> format."""
+    match = re.search(
+        r"<\|start\|>assistant<\|channel\|>tool\s*(.*?)(?:<\|im_end\|>|\Z)",
+        text,
+        re.DOTALL,
+    )
+    if match:
+        try:
+            data = json.loads(match.group(1).strip())
+            result = _make_tool_call(data)
+            if result is not None:
+                logger.debug("tool call: parsed OpenClaw channel format")
+            return result
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return None
 
 
 def _make_tool_call(data: dict) -> ToolCall | None:
@@ -55,7 +81,11 @@ def _parse_hermes(text: str) -> ToolCall | None:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    return None
+    # Fallback: model returned plain JSON instead of <tool_call> XML
+    result = _parse_generic(text)
+    if result is not None:
+        logger.debug("tool call: parsed plain JSON fallback (model skipped <tool_call> wrapper)")
+    return result
 
 
 def _parse_llama3(text: str) -> ToolCall | None:

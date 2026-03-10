@@ -12,7 +12,7 @@ after `update_cell_at`, or use a column key instead of coordinate index.
 
 ---
 
-**Date:** 2026-03-08 (updated)
+**Date:** 2026-03-10 (updated)
 **Reviewer:** Claude Opus 4.6
 **Overall Quality:** 8/10 — clean architecture, good async patterns, solid test coverage
 
@@ -151,21 +151,19 @@ Widget owns all filtering (whitelist, blocklist, min_context, min_max_length + t
 **File:** `app/tui/screens/config.py`
 The toggle was removed from the config screen. The `broaden_on_retry` field remains in `RetrySettings` for programmatic use but is no longer user-configurable.
 
+### 29. Tool call format retry on malformed `<tool_call>` responses — FIXED
+**File:** `app/routers/chat.py`
+Some models (e.g. Qwen3.5-27B via koboldcpp) emit a second `<tool_call>` opening tag instead of `</tool_call>`, bypassing the stop sequence and producing unparseable JSON. Both the non-streaming and streaming paths now detect this pattern (`response_text` starts with `<tool_call>` but `parse_tool_call` returns `None`), log a warning, and resubmit the job to Horde up to 3 times before giving up.
+
 ---
 
 ## Suggestions for Enhancement
 
-### A. OpenAI-compatible error codes — OPEN
-Return `error.code` field (e.g., `model_not_found`, `context_length_exceeded`).
-
 ### B. `/v1/embeddings` stub — OPEN
 Return clear "not supported" error instead of 404.
 
-### C. Health check with Horde status — OPEN
-Extend `/health` to ping Horde, return connectivity + kudos balance.
-
-### D. Configurable max concurrent requests — OPEN
-Add semaphore to prevent overloading Horde.
+### D. Configurable max concurrent requests — FIXED
+`max_concurrent_requests: int = 3` in `Settings` (0 = unlimited). An `asyncio.Semaphore` is created at startup and stored on `app.state.horde_semaphore`. All three generation routers (chat, completions, images) acquire it for the full job lifecycle (submit → poll → result). Exposed in the TUI Config screen under "Max Concurrent Jobs". Requires server restart to take effect.
 
 ### E. Model info endpoint — OPEN
 `/v1/models/{model_id}` returning context length, max tokens, capabilities.
@@ -177,9 +175,6 @@ Behind `debug_logging: true` config flag.
 Map OpenAI `tool_choice`/`functions` to Horde prompt formatting.
 Implemented via prompt injection + output parsing. See `BETTER_TOOLS.md` for design details.
 Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/templates.py`, `app/horde/translate.py`, `app/routers/chat.py`. Tests: `tests/test_tools.py` (21 tests).
-
-### H. Prometheus metrics endpoint — OPEN
-`/metrics` with request counts, latencies, queue times, kudos usage.
 
 ---
 

@@ -205,3 +205,15 @@ async def test_done_but_no_generations():
             submit_fn, poll_fn, cancel_fn,
             max_retries=0, poll_interval=0, backoff_base=0
         )
+
+
+async def test_cancelled_error_cancels_job_and_reraises():
+    """CancelledError during polling cancels the in-flight job and re-raises."""
+    submit_fn = AsyncMock(return_value="job-cancel")
+    poll_fn = AsyncMock(side_effect=asyncio.CancelledError())
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(asyncio.CancelledError):
+        await with_retry(submit_fn, poll_fn, cancel_fn, max_retries=0, poll_interval=0)
+
+    cancel_fn.assert_awaited_once_with("job-cancel")

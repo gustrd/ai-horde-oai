@@ -80,6 +80,9 @@ class ConfigScreen(Screen):
             with Horizontal(classes="field-row"):
                 yield Label("Port:", classes="field-label")
                 yield Input(id="field-port", classes="field-input")
+            with Horizontal(classes="field-row"):
+                yield Label("Max Concurrent Jobs:", classes="field-label")
+                yield Input(id="field-max-concurrent", placeholder="0 = unlimited", classes="field-input")
 
             yield Label("─── Model Filters ──────────────────", classes="section-header")
             with Horizontal(classes="field-row"):
@@ -117,6 +120,7 @@ class ConfigScreen(Screen):
         self.query_one("#field-api-url", Input).value = cfg.horde_api_url
         self.query_one("#field-host", Input).value = cfg.host
         self.query_one("#field-port", Input).value = str(cfg.port)
+        self.query_one("#field-max-concurrent", Input).value = str(cfg.max_concurrent_requests)
         self.query_one("#field-default-model", Input).value = cfg.default_model
         self.query_one("#field-min-context", Input).value = str(cfg.model_min_context)
         self.query_one("#field-min-max-tokens", Input).value = str(cfg.model_min_max_length)
@@ -137,6 +141,7 @@ class ConfigScreen(Screen):
 
         try:
             port = int(self.query_one("#field-port", Input).value)
+            max_concurrent = int(self.query_one("#field-max-concurrent", Input).value or "3")
             min_ctx = int(self.query_one("#field-min-context", Input).value or "0")
             min_max_tokens = int(self.query_one("#field-min-max-tokens", Input).value or "0")
             max_retries = int(self.query_one("#field-max-retries", Input).value or "2")
@@ -158,6 +163,7 @@ class ConfigScreen(Screen):
             "horde_api_url": self.query_one("#field-api-url", Input).value,
             "host": self.query_one("#field-host", Input).value,
             "port": port,
+            "max_concurrent_requests": max_concurrent,
             "default_model": self.query_one("#field-default-model", Input).value,
             "model_min_context": min_ctx,
             "model_min_max_length": min_max_tokens,
@@ -168,5 +174,5 @@ class ConfigScreen(Screen):
         save_config(new_config)
         self.app.config = new_config
         self.query_one("#status", Label).update(
-            "✓ Config saved. Restart the server for API key / URL changes to take effect."
+            "✓ Config saved. Restart the server for API key / URL / concurrency changes to take effect."
         )

@@ -35,6 +35,7 @@ async def with_retry(
     backoff_base: float = 2.0,
     on_broaden: Callable[[], None] | None = None,
     on_status: Callable[[Any], None] | None = None,
+    on_submit: Callable[[str], None] | None = None,
     poll_interval: float = 2.0,
 ) -> StatusT:
     """Submit a Horde job with auto-retry, exponential backoff, and timeout.
@@ -74,6 +75,8 @@ async def with_retry(
         job_id: str | None = None
         try:
             job_id = await submit_fn()
+            if on_submit:
+                on_submit(job_id)
             deadline = time.monotonic() + timeout_seconds
 
             while time.monotonic() < deadline:
@@ -102,6 +105,11 @@ async def with_retry(
             if job_id:
                 await cancel_fn(job_id)
             last_exc = exc
+
+        except asyncio.CancelledError:
+            if job_id:
+                await cancel_fn(job_id)
+            raise
 
     raise HordeTimeoutError(
         f"All {1 + max_retries} attempts exhausted. Last error: {last_exc}"

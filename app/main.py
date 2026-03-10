@@ -22,6 +22,7 @@ logger = logging.getLogger("ai-horde-oai")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio as _asyncio
     config: Settings = app.state.config
     horde = HordeClient(
         base_url=config.horde_api_url,
@@ -31,6 +32,8 @@ async def lifespan(app: FastAPI):
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)
+    n = config.max_concurrent_requests
+    app.state.horde_semaphore = _asyncio.Semaphore(n) if n > 0 else None
     yield
     await horde.close()
 
@@ -79,10 +82,14 @@ def create_app(config: Settings | None = None) -> FastAPI:
                     active_req: dict = {
                         "method": request.method,
                         "path": request.url.path,
+                        "alias": "",
                         "model": "",
                         "max_tokens": 0,
                         "queue_pos": None,
                         "eta": None,
+                        "job_id": None,
+                        "cancel_fn": None,
+                        "messages": None,
                     }
                     request.state.active_req = active_req
                     start_callback(active_req)

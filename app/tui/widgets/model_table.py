@@ -1,6 +1,7 @@
 """Filterable model list widget."""
 from __future__ import annotations
 
+import re
 import textwrap
 
 from textual.app import ComposeResult
@@ -18,10 +19,17 @@ _COLUMNS: list[tuple[str, callable, bool]] = [
     ("Max Tok",  lambda m: m.max_length,           True),
     ("Queued",   lambda m: m.queued,               True),
     ("ETA",      lambda m: m.eta,                  True),
+    ("T/s",      lambda m: _parse_tps(m.performance), True),
     ("Name",     lambda m: m.name.lower(),         False),
 ]
 
 _NAME_WRAP = 40  # chars before wrapping model name
+
+
+def _parse_tps(performance: object) -> float:
+    """Extract tokens/sec float from a Horde performance string like '19.0 tokens per second'."""
+    m = re.search(r"([\d.]+)", str(performance or ""))
+    return float(m.group(1)) if m else 0.0
 
 
 class ModelTable(Widget):
@@ -107,6 +115,8 @@ class ModelTable(Widget):
         default_row_idx: int | None = None
         for idx, m in enumerate(sorted_models):
             eta_str = f"{m.eta}s" if m.eta else "-"
+            tps = _parse_tps(m.performance)
+            tps_str = f"{tps:.1f}" if tps else "-"
             name = textwrap.fill(m.name, width=_NAME_WRAP)
             table.add_row(
                 str(m.count),
@@ -114,6 +124,7 @@ class ModelTable(Widget):
                 str(m.max_length),
                 str(m.queued),
                 eta_str,
+                tps_str,
                 name,
                 key=m.name,  # key stays original (used for model selection)
             )

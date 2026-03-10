@@ -8,7 +8,11 @@
       "Bash(python:*)",
       "WebSearch",
       "mcp__chrome-devtools__take_screenshot",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebFetch(domain:aihorde.net)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:dbzer0.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

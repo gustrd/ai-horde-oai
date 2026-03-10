@@ -230,8 +230,8 @@ async def test_all_models_property_reflects_unfiltered_total():
 # ---------------------------------------------------------------------------
 
 def _get_name_cell(dt: DataTable, row_key) -> str:
-    """Return the Name column cell value (last column, index 5)."""
-    col_key = list(dt.columns.keys())[5]
+    """Return the Name column cell value (last column, index 6)."""
+    col_key = list(dt.columns.keys())[6]
     return str(dt.get_cell(row_key, col_key))
 
 

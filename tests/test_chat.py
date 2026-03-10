@@ -254,3 +254,62 @@ async def test_health_endpoint(client):
     response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+async def test_stream_chat_cancels_job_on_client_disconnect():
+    """When the streaming generator is closed (client disconnect), the Horde job is cancelled."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.routers.chat import _stream_chat
+    from app.schemas.horde import HordeJobStatus
+
+    pending_status = HordeJobStatus(
+        done=False, faulted=False, generations=[], kudos=0,
+        queue_position=5, wait_time=10,
+    )
+
+    horde = AsyncMock()
+    horde.submit_text_job = AsyncMock(return_value="disconnect-job-id")
+    horde.poll_text_status = AsyncMock(return_value=pending_status)
+    horde.cancel_text_job = AsyncMock()
+
+    gen = _stream_chat(horde, MagicMock(), "best", "test-model", stall_timeout=9999)
+
+    # First chunk: role delta
+    first = await gen.__anext__()
+    assert "assistant" in first
+
+    # Second chunk: x-horde-resolved comment (alias != real_model)
+    second = await gen.__anext__()
+    assert "x-horde-resolved" in second
+
+    # Third chunk: job submitted, poll returns pending → queue_position SSE comment
+    third = await gen.__anext__()
+    assert "queue_position=5" in third
+
+    # Close the generator (simulates client disconnect)
+    await gen.aclose()
+
+    # The Horde job should have been cancelled
+    horde.cancel_text_job.assert_awaited_once_with("disconnect-job-id")
+
+
+async def test_stream_chat_no_cancel_after_normal_completion(client):
+    """Streaming generator that completes normally does NOT try to cancel the job."""
+    cancel_called = False
+    original_delete = None
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "best",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "stream": True,
+        },
+    ) as response:
+        assert response.status_code == 200
+        lines = [l async for l in response.aiter_lines()]
+
+    # Normal stream should end with [DONE] — no orphaned cancel
+    assert "data: [DONE]" in lines

@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import nullcontext
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,45 @@ from app.schemas.openai import (
 router = APIRouter()
 
 
+def _log_retry(
+    request: Request,
+    model: str,
+    real_model: str,
+    gen,
+    kudos: float,
+    log_messages: list | None,
+    input_tokens: int,
+    duration: float,
+    reason: str,
+) -> None:
+    """Emit a retry log entry (status='retry') to request_log and log_callback."""
+    try:
+        entry = RequestLogEntry(
+            timestamp=datetime.now(),
+            method=request.method,
+            path=request.url.path,
+            status="retry",
+            duration=duration,
+            model=model,
+            real_model=real_model,
+            worker=gen.worker_name or "" if gen else "",
+            worker_id=gen.worker_id or "" if gen else "",
+            kudos=kudos,
+            messages=log_messages,
+            error=reason,
+            input_tokens=input_tokens,
+            output_tokens=0,
+        )
+        request_log = getattr(request.app.state, "request_log", None)
+        if request_log is not None:
+            request_log.append(entry)
+        log_callback = getattr(request.app.state, "log_callback", None)
+        if log_callback is not None:
+            log_callback(entry)
+    except Exception:
+        pass
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: ChatCompletionRequest):
     horde: HordeClient = request.app.state.horde
@@ -59,8 +99,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     # Enrich the active-request indicator with model + token budget
     active_req = getattr(request.state, "active_req", None)
     if active_req is not None:
+        active_req["alias"] = body.model
         active_req["model"] = real_model
         active_req["max_tokens"] = body.max_tokens or config.default_max_tokens
+        active_req["cancel_fn"] = horde.cancel_text_job
+        active_req["messages"] = log_messages
         refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
         if refresh_cb:
             refresh_cb()
@@ -71,33 +114,48 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         tools_fmt: str | None = None
         if body.tools and body.tool_choice != "none":
             tools_fmt = detect_tool_format(real_model)
+        _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
         return StreamingResponse(
             _stream_chat(
                 horde, horde_req, body.model, real_model,
                 config.stream_stall_timeout, request, log_messages,
-                tools_fmt=tools_fmt,
+                tools_fmt=tools_fmt, sem=_sem,
+                max_retries=config.retry.max_retries,
             ),
             media_type="text/event-stream",
         )
 
     # Non-streaming: submit, poll, return (with tool-format retry)
-    _TOOL_FORMAT_MAX_RETRIES = 3
+    _TOOL_FORMAT_MAX_RETRIES = config.retry.max_retries
     gen = None
     response_text = ""
     reasoning_content: str | None = None
     tool_call: ToolCall | None = None
+    _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
+
+    input_tokens = sum(
+        estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
+    )
 
     for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
+        _attempt_start = time.monotonic()
+
+        def _on_submit(job_id: str) -> None:
+            if active_req is not None:
+                active_req["job_id"] = job_id
+
         try:
-            status = await with_retry(
-                submit_fn=lambda: horde.submit_text_job(horde_req),
-                poll_fn=horde.poll_text_status,
-                cancel_fn=horde.cancel_text_job,
-                max_retries=config.retry.max_retries,
-                timeout_seconds=config.retry.timeout_seconds,
-                broaden_on_retry=config.retry.broaden_on_retry,
-                backoff_base=config.retry.backoff_base,
-            )
+            async with _sem:
+                status = await with_retry(
+                    submit_fn=lambda: horde.submit_text_job(horde_req),
+                    poll_fn=horde.poll_text_status,
+                    cancel_fn=horde.cancel_text_job,
+                    max_retries=config.retry.max_retries,
+                    timeout_seconds=config.retry.timeout_seconds,
+                    broaden_on_retry=config.retry.broaden_on_retry,
+                    backoff_base=config.retry.backoff_base,
+                    on_submit=_on_submit,
+                )
         except HordeTimeoutError as e:
             request.state.log_extras = {
                 "model": body.model,
@@ -117,6 +175,16 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         gen = status.generations[0] if status.generations else None
         reasoning_content, response_text = _split_thinking(gen.text if gen else "")
+        _attempt_dur = time.monotonic() - _attempt_start
+
+        # Retry empty responses
+        if not response_text.strip() and not reasoning_content:
+            logger.warning("empty response (attempt %d/%d)", _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES)
+            if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
+                           log_messages, input_tokens, _attempt_dur, "empty response")
+                continue
+            response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {len(gen.text if gen else '')} chars]"
 
         # Tool call detection (non-streaming)
         tool_call = None
@@ -129,12 +197,12 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                     _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
                 )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                    _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
+                               log_messages, input_tokens, _attempt_dur, "tool call invalid format")
                     continue
+                _snippet = response_text[:200].replace("\n", " ")
+                response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
         break
-
-    input_tokens = sum(
-        estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
-    )
 
     request.state.log_extras = {
         "model": body.model,
@@ -163,6 +231,8 @@ async def _stream_chat(
     request: Request | None = None,
     log_messages: list | None = None,
     tools_fmt: str | None = None,
+    sem=None,
+    max_retries: int = 2,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -187,52 +257,64 @@ async def _stream_chat(
     status_code = 200
     error_msg = ""
 
-    _TOOL_FORMAT_MAX_RETRIES = 3
+    _TOOL_FORMAT_MAX_RETRIES = max_retries
+    _sem = sem or nullcontext()
+    job_done = False
     try:
         # Tell the client which model was actually resolved (alias → real name)
         if real_model != alias:
             yield f": x-horde-resolved model={real_model}\n\n"
 
         tool_call: ToolCall | None = None
+        _stream_input_tokens = sum(
+            estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
+        )
         for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
-            job_id = await horde.submit_text_job(horde_req)
+            _attempt_start = time.monotonic()
+            async with _sem:
+                job_id = await horde.submit_text_job(horde_req)
+                if request is not None:
+                    _req = getattr(request.state, "active_req", None)
+                    if _req is not None:
+                        _req["job_id"] = job_id
+                        _req["cancel_fn"] = horde.cancel_text_job
 
-            last_progress = time.monotonic()
-            last_queue_pos: int | None = None
+                last_progress = time.monotonic()
+                last_queue_pos: int | None = None
 
-            while True:
-                # Check stall timeout — no progress (queue movement) for too long
-                if time.monotonic() - last_progress > stall_timeout:
-                    yield "data: [DONE]\n\n"
-                    return
+                while True:
+                    # Check stall timeout — no progress (queue movement) for too long
+                    if time.monotonic() - last_progress > stall_timeout:
+                        yield "data: [DONE]\n\n"
+                        return
 
-                status = await horde.poll_text_status(job_id)
+                    status = await horde.poll_text_status(job_id)
 
-                if status.done and status.generations:
-                    break
+                    if status.done and status.generations:
+                        break
 
-                if status.faulted:
-                    yield "data: [DONE]\n\n"
-                    return
+                    if status.faulted:
+                        yield "data: [DONE]\n\n"
+                        return
 
-                # Track progress: queue position changing counts as progress
-                if status.queue_position != last_queue_pos:
-                    last_progress = time.monotonic()
-                    last_queue_pos = status.queue_position
+                    # Track progress: queue position changing counts as progress
+                    if status.queue_position != last_queue_pos:
+                        last_progress = time.monotonic()
+                        last_queue_pos = status.queue_position
 
-                # Emit SSE comment with queue position
-                if status.queue_position is not None:
-                    yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
-                    if request is not None:
-                        _req = getattr(request.state, "active_req", None)
-                        if _req is not None:
-                            _req["queue_pos"] = status.queue_position
-                            _req["eta"] = status.wait_time
-                            refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
-                            if refresh_cb:
-                                refresh_cb()
+                    # Emit SSE comment with queue position
+                    if status.queue_position is not None:
+                        yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
+                        if request is not None:
+                            _req = getattr(request.state, "active_req", None)
+                            if _req is not None:
+                                _req["queue_pos"] = status.queue_position
+                                _req["eta"] = status.wait_time
+                                refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
+                                if refresh_cb:
+                                    refresh_cb()
 
-                await asyncio.sleep(2)
+                    await asyncio.sleep(2)
 
             gen = status.generations[0]
             reasoning_content, response_text = _split_thinking(gen.text)
@@ -241,6 +323,17 @@ async def _stream_chat(
             kudos = status.kudos or 0.0
             # Use the actual model Horde assigned (may differ from alias like "best")
             actual_model = gen.model or real_model
+            _attempt_dur = time.monotonic() - _attempt_start
+
+            # Retry empty responses
+            if not response_text.strip() and not reasoning_content:
+                logger.warning("empty response (attempt %d/%d)", _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES)
+                if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                    if request is not None:
+                        _log_retry(request, alias, real_model, gen, kudos,
+                                   log_messages, _stream_input_tokens, _attempt_dur, "empty response")
+                    continue
+                response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {len(gen.text)} chars]"
 
             # Tool call detection — parse before streaming
             if tools_fmt:
@@ -251,8 +344,15 @@ async def _stream_chat(
                         _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
                     )
                     if _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                        if request is not None:
+                            _log_retry(request, alias, real_model, gen, kudos,
+                                       log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format")
                         continue
+                    _snippet = response_text[:200].replace("\n", " ")
+                    response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
             break
+
+        job_done = True
 
         if tool_call:
             # Emit tool_calls delta chunks (OpenClaw / OpenAI streaming protocol)
@@ -329,11 +429,17 @@ async def _stream_chat(
     except Exception as exc:
         error_msg = str(exc) or type(exc).__name__
         status_code = 500
-        if job_id:
-            await horde.cancel_text_job(job_id)
         yield "data: [DONE]\n\n"
 
     finally:
+        # Cancel the Horde job if the generator was closed before it completed
+        # (handles client disconnect, CancelledError, GeneratorExit, and exceptions)
+        if job_id and not job_done:
+            try:
+                await horde.cancel_text_job(job_id)
+            except Exception:
+                pass
+
         # Log the completed streaming request
         if request is not None:
             try:

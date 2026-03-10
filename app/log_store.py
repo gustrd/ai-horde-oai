@@ -23,7 +23,7 @@ class RequestLogEntry:
     timestamp: datetime
     method: str
     path: str
-    status: int
+    status: int | str
     duration: float
     model: str = ""
     real_model: str = ""
@@ -72,6 +72,15 @@ def entry_to_dict(entry: RequestLogEntry) -> dict:
     return d
 
 
+def _load_status(value) -> int | str:
+    if isinstance(value, str) and not value.isdigit():
+        return value
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return str(value)
+
+
 def entry_from_dict(d: dict) -> RequestLogEntry:
     ts = d.get("timestamp", "")
     try:
@@ -82,7 +91,7 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
         timestamp=timestamp,
         method=d.get("method", ""),
         path=d.get("path", ""),
-        status=int(d.get("status", 0)),
+        status=_load_status(d.get("status", 0)),
         duration=float(d.get("duration", 0.0)),
         model=d.get("model", ""),
         real_model=d.get("real_model", ""),
