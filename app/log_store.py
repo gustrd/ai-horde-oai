@@ -37,6 +37,9 @@ class RequestLogEntry:
     source: str = "api"            # always "api"; reserved for future use
     input_tokens: int = 0          # estimated input token count
     output_tokens: int = 0         # estimated output token count
+    reasoning_content: str = ""    # chain-of-thought from reasoning models
+    reasoning_tokens: int = 0      # estimated token count of reasoning block
+    checked: bool = False          # user-toggled read/checked flag
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +65,9 @@ def entry_to_dict(entry: RequestLogEntry) -> dict:
         "source": entry.source,
         "input_tokens": entry.input_tokens,
         "output_tokens": entry.output_tokens,
+        "reasoning_content": entry.reasoning_content,
+        "reasoning_tokens": entry.reasoning_tokens,
+        "checked": entry.checked,
     }
     return d
 
@@ -90,6 +96,9 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
         source=d.get("source", "api"),
         input_tokens=int(d.get("input_tokens", 0)),
         output_tokens=int(d.get("output_tokens", 0)),
+        reasoning_content=d.get("reasoning_content", ""),
+        reasoning_tokens=int(d.get("reasoning_tokens", 0)),
+        checked=bool(d.get("checked", False)),
     )
 
 
@@ -130,6 +139,19 @@ def load_entries(path: Path | None = None, max_entries: int = MAX_LOADED_ENTRIES
         return entries
     except Exception:
         return []
+
+
+def save_entries(entries: list[RequestLogEntry], path: Path | None = None) -> None:
+    """Rewrite the log file from the in-memory entry list (e.g. after toggling checked)."""
+    if path is None:
+        path = LOG_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry_to_dict(entry)) + "\n")
+    except Exception:
+        pass
 
 
 def trim_log_file(path: Path | None = None, max_entries: int = MAX_PERSISTED_ENTRIES) -> None:

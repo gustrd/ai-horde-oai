@@ -34,7 +34,7 @@ class Settings(BaseModel):
     port: int = 8000
     client_agent: str = "ai-horde-oai:0.1:github"
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
-    max_max_tokens: int = 512       # upper cap on max_tokens from clients
+    default_max_tokens: int = 2048  # fallback when client doesn't specify max_tokens
     model_cache_ttl: int = 60       # seconds to cache /v2/status/models response
     stream_stall_timeout: int = 120  # seconds without progress before aborting SSE
 

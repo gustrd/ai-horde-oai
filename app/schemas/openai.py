@@ -7,10 +7,47 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class ToolFunction(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict | None = None
+
+
+class Tool(BaseModel):
+    type: Literal["function"] = "function"
+    function: ToolFunction
+
+
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str  # JSON string (OpenAI standard)
+
+
+class ToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex[:24]}")
+    type: Literal["function"] = "function"
+    function: ToolCallFunction
+
+
+class StreamToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class StreamToolCall(BaseModel):
+    index: int
+    id: str | None = None
+    type: str | None = None
+    function: StreamToolCallFunction
+
+
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool", "developer"]
     content: str | list[Any] | None = None
     name: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    reasoning_content: str | None = None  # DeepSeek-compatible reasoning field
 
     def content_as_str(self) -> str | None:
         if self.content is None:
@@ -39,6 +76,9 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     user: str | None = None
+    tools: list[Tool] | None = None
+    tool_choice: str | dict | None = None
+    parallel_tool_calls: bool = True
 
     model_config = {"extra": "allow"}
 
@@ -107,6 +147,8 @@ class ModelList(BaseModel):
 class StreamDelta(BaseModel):
     role: str | None = None
     content: str | None = None
+    tool_calls: list[StreamToolCall] | None = None
+    reasoning_content: str | None = None  # DeepSeek-compatible reasoning field
 
 
 class StreamChoice(BaseModel):

@@ -41,11 +41,11 @@ def test_chat_to_horde_stop_list(config):
     assert result.params.stop_sequence == ["<|end|>", "</s>"]
 
 
-def test_chat_to_horde_max_tokens_capped(config):
-    # max_tokens > 512 should be capped to 512
+def test_chat_to_horde_max_tokens_passed_through(config):
+    # max_tokens is passed through without capping
     req = make_chat_request(max_tokens=2000)
     result = chat_to_horde(req, "model/x", config)
-    assert result.params.max_length == 512
+    assert result.params.max_length == 2000
 
 
 def test_chat_to_horde_worker_whitelist(config):

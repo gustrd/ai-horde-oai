@@ -1,5 +1,17 @@
 # Code Review: ai-horde-oai
 
+## Pending Issues
+
+### [PENDING] Log table "checked" flag not displaying correctly
+The `*` checked flag in the log table (`app/tui/screens/logs.py`) is not showing
+after toggling with Space. Multiple approaches attempted — `update_cell_at` with
+proper `Coordinate`, full `_rebuild_table()` after toggle, and JSONL persistence
+via `save_entries()`. The data layer is correct; the visual update is the unresolved
+problem. Suggestions to try: call `table.refresh()` or `table.refresh_row(row)`
+after `update_cell_at`, or use a column key instead of coordinate index.
+
+---
+
 **Date:** 2026-03-08 (updated)
 **Reviewer:** Claude Opus 4.6
 **Overall Quality:** 8/10 — clean architecture, good async patterns, solid test coverage
@@ -161,8 +173,10 @@ Add semaphore to prevent overloading Horde.
 ### F. Debug request/response body logging — OPEN
 Behind `debug_logging: true` config flag.
 
-### G. Tool/function calling translation — OPEN
+### G. Tool/function calling translation — FIXED
 Map OpenAI `tool_choice`/`functions` to Horde prompt formatting.
+Implemented via prompt injection + output parsing. See `BETTER_TOOLS.md` for design details.
+Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/templates.py`, `app/horde/translate.py`, `app/routers/chat.py`. Tests: `tests/test_tools.py` (21 tests).
 
 ### H. Prometheus metrics endpoint — OPEN
 `/metrics` with request counts, latencies, queue times, kudos usage.

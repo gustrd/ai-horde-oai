@@ -344,7 +344,7 @@ async def test_config_save_preserves_unrelated_fields():
     # Config with custom fields not in the form
     config = make_config(
         model_aliases={"gpt4": "aphrodite/llama-70b"},
-        max_max_tokens=256,
+        default_max_tokens=256,
         model_min_max_length=128,
     )
     app = HordeApp(config=config)
@@ -365,7 +365,7 @@ async def test_config_save_preserves_unrelated_fields():
         assert saved.port == 9090
         # Fields not in the form must be preserved
         assert saved.model_aliases == {"gpt4": "aphrodite/llama-70b"}
-        assert saved.max_max_tokens == 256
+        assert saved.default_max_tokens == 256
         assert saved.model_min_max_length == 128
 
 

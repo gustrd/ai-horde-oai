@@ -76,7 +76,16 @@ def create_app(config: Settings | None = None) -> FastAPI:
             start_callback = getattr(request.app.state, "start_callback", None)
             if start_callback is not None:
                 try:
-                    start_callback(request.method, request.url.path)
+                    active_req: dict = {
+                        "method": request.method,
+                        "path": request.url.path,
+                        "model": "",
+                        "max_tokens": 0,
+                        "queue_pos": None,
+                        "eta": None,
+                    }
+                    request.state.active_req = active_req
+                    start_callback(active_req)
                 except Exception:
                     pass
 
@@ -114,6 +123,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         error=extras.get("error", ""),
                         input_tokens=extras.get("input_tokens", 0),
                         output_tokens=extras.get("output_tokens", 0),
+                        reasoning_content=extras.get("reasoning_content", ""),
+                        reasoning_tokens=extras.get("reasoning_tokens", 0),
                     )
                     request_log = getattr(request.app.state, "request_log", None)
                     if request_log is not None:

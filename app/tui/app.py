@@ -99,6 +99,7 @@ class HordeApp(App):
         fastapi_app.state.request_log = self.request_log
         fastapi_app.state.log_callback = self._notify_logs
         fastapi_app.state.start_callback = self._notify_request_start
+        fastapi_app.state.refresh_active_callback = self._refresh_active_display
 
         uv_config = uvicorn.Config(
             app=fastapi_app,
@@ -112,9 +113,9 @@ class HordeApp(App):
         self._uv_server.install_signal_handlers = lambda: None
         self._server_task = asyncio.create_task(self._uv_server.serve())
 
-    def _notify_request_start(self, method: str, path: str) -> None:
+    def _notify_request_start(self, active_req: dict) -> None:
         """Called by FastAPI middleware when a request begins."""
-        self.active_requests.append({"method": method, "path": path})
+        self.active_requests.append(active_req)
         self._refresh_active_display()
 
     def _notify_logs(self, entry: RequestLogEntry) -> None:
@@ -138,6 +139,11 @@ class HordeApp(App):
                 break
 
     async def on_unmount(self) -> None:
+        import logging
+        # Suppress uvicorn's ASGI error logger before shutdown so the expected
+        # CancelledError from in-flight requests doesn't print a traceback.
+        logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+
         if self.horde:
             await self.horde.close()
         if self._uv_server is not None:

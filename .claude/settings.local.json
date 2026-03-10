@@ -6,7 +6,9 @@
       "Bash(\"C:/Users/gustr/_git/ai-horde-oai/tests/test_log_store.py\":*)",
       "Bash(uv run:*)",
       "Bash(python:*)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__chrome-devtools__take_screenshot",
+      "Bash(python3:*)"
     ]
   }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.horde.templates import messages_to_prompt
+from app.horde.tool_parser import detect_tool_format
 from app.schemas.horde import (
     HordeImageParams,
     HordeImageRequest,
@@ -21,15 +22,25 @@ def chat_to_horde(
     config: Settings,
 ) -> HordeTextRequest:
     """Translate an OpenAI ChatCompletionRequest to a HordeTextRequest."""
-    prompt = messages_to_prompt(request.messages, real_model)
+    # Serialize tools for prompt injection (skip if tool_choice == "none")
+    tools: list[dict] | None = None
+    if request.tools and request.tool_choice != "none":
+        tools = [t.model_dump() for t in request.tools]
 
-    cap = config.max_max_tokens
+    prompt = messages_to_prompt(request.messages, real_model, tools=tools)
+
+    stop_seqs = _normalize_stop(request.stop) or []
+    if tools:
+        fmt = detect_tool_format(real_model)
+        extra_stops = ["</tool_call>"] if fmt == "hermes" else ["<|eom_id|>"]
+        stop_seqs = stop_seqs + extra_stops
+
     params = HordeTextParams(
-        max_length=max(16, min(request.max_tokens or cap, cap)),
+        max_length=max(16, request.max_tokens or config.default_max_tokens),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,
-        stop_sequence=_normalize_stop(request.stop),
+        stop_sequence=stop_seqs or None,
         n=request.n,
     )
 
@@ -60,13 +71,11 @@ def completion_to_horde(
     """Translate an OpenAI CompletionRequest to a HordeTextRequest."""
     prompt = request.prompt if isinstance(request.prompt, str) else request.prompt[0]
 
-    cap = config.max_max_tokens
     params = HordeTextParams(
-        max_length=max(16, min(request.max_tokens or cap, cap)),
+        max_length=max(16, request.max_tokens or config.default_max_tokens),
         max_context_length=4096,
         temperature=request.temperature,
         top_p=request.top_p,
-        stop_sequence=_normalize_stop(request.stop),
         n=request.n,
     )
 
