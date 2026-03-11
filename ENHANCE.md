@@ -155,6 +155,10 @@ The toggle was removed from the config screen. The `broaden_on_retry` field rema
 **File:** `app/routers/chat.py`
 Some models (e.g. Qwen3.5-27B via koboldcpp) emit a second `<tool_call>` opening tag instead of `</tool_call>`, bypassing the stop sequence and producing unparseable JSON. Both the non-streaming and streaming paths now detect this pattern (`response_text` starts with `<tool_call>` but `parse_tool_call` returns `None`), log a warning, and resubmit the job to Horde up to 3 times before giving up.
 
+### 30. Robust Model Unavailability Retries — FIXED
+**Files:** `app/horde/retry.py`, `app/routers/chat.py`
+Retries triggered by `is_possible=False` now bypass the `max_retries` configuration, cycling through all available model fallbacks (with a 2s delay and automatic model banning) until a request succeeds or fallback models are exhausted.
+
 ---
 
 ## Suggestions for Enhancement

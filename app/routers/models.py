@@ -23,3 +23,10 @@ async def get_model(model_id: str, request: Request) -> ModelCard:
     if model_id not in dummy_names:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
     return ModelCard(id=model_id)
+
+
+@router.post("/v1/models/unban_all")
+async def unban_all(request: Request):
+    horde = request.app.state.horde
+    horde.unban_all_models()
+    return {"status": "ok", "message": "Unavailable model bans cleared"}

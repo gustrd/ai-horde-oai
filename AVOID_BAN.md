@@ -277,7 +277,16 @@ All anonymous requests are treated as fully shared (no privacy option).
 
 ---
 
-## 10. What This Means for This Proxy (ai-horde-oai)
+## 10. Local Defensive Banning
+
+To avoid "poisoning" the retry loop with known-broken models, this proxy implements local defensive banning:
+
+1. **Unavailable Model Ban**: If a model returns `is_possible=False` (no workers), it is banned locally for **1 hour**.
+2. **Continuous Fallback**: On an unavailable model ban, the proxy immediately attempts to re-resolve the requested alias against the remaining filtered model list and retries. This process repeats infinitely (ignoring the `max_retries` config) until a working model is found or the alias has no remaining models left.
+
+---
+
+## 11. What This Means for This Proxy (ai-horde-oai)
 
 | Risk | Assessment |
 |---|---|

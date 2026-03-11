@@ -545,13 +545,15 @@ async def test_stream_chat_impossible_fallback_to_new_model():
     assert horde.submit_text_job.await_count == 2
 
 
-async def test_chat_completions_is_possible_false_returns_503(app, client, respx_mock):
-    """Non-streaming: is_possible=False → immediate 503, no 300s wait."""
+async def test_chat_completions_is_possible_false_retries(app, client, respx_mock):
+    """Non-streaming: is_possible=False retries by re-resolving the model."""
     impossible = {
         "done": False, "faulted": False, "processing": 0, "waiting": 1,
         "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
         "generations": [], "is_possible": False,
     }
+    # Use exact URL overrides (respx resolves exact-URL routes LIFO, so last-added wins).
+    # Override the status poll for test-job-id to always return is_possible=False.
     respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
         return_value=httpx.Response(200, json=impossible)
     )
@@ -559,8 +561,12 @@ async def test_chat_completions_is_possible_false_returns_503(app, client, respx
         return_value=httpx.Response(200, json={"message": "Cancelled"})
     )
     app.state.config = app.state.config.model_copy(
-        update={"retry": _fast_retry(max_retries=0, timeout_seconds=60)}
+        update={"retry": _fast_retry(max_retries=1, timeout_seconds=60)}
     )
+    # Invalidate the horde model cache so on_broaden re-fetches (returns MODELS_FIXTURE
+    # minus the banned model); with only one model available and it now banned, the
+    # second attempt also fails — 2 attempts exhaust → HordeTimeoutError → 504.
+    app.state.horde.invalidate_model_cache()
     response = await client.post(
         "/v1/chat/completions",
         json={
@@ -568,8 +574,7 @@ async def test_chat_completions_is_possible_false_returns_503(app, client, respx
             "messages": [{"role": "user", "content": "Hello!"}],
         },
     )
-    assert response.status_code == 503
-    assert "no active workers" in response.json()["detail"]
+    assert response.status_code == 504
 
 
 async def test_chat_completions_is_possible_false_bans_model(app, client, respx_mock):
@@ -579,6 +584,8 @@ async def test_chat_completions_is_possible_false_bans_model(app, client, respx_
         "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
         "generations": [], "is_possible": False,
     }
+    # Use exact URL overrides (respx resolves exact-URL routes LIFO, so last-added wins).
+    # Override the status poll for test-job-id to always return is_possible=False.
     respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
         return_value=httpx.Response(200, json=impossible)
     )
@@ -586,15 +593,19 @@ async def test_chat_completions_is_possible_false_bans_model(app, client, respx_
         return_value=httpx.Response(200, json={"message": "Cancelled"})
     )
     app.state.config = app.state.config.model_copy(
-        update={"retry": _fast_retry(max_retries=0, timeout_seconds=60)}
+        update={"retry": _fast_retry(max_retries=1, timeout_seconds=60)}
     )
-    await client.post(
+    app.state.horde.invalidate_model_cache()
+    # Let the error propagate so we can assert the model was banned during the attempt.
+    # It will surface as a 504 HordeTimeoutError because all attempts fail.
+    response = await client.post(
         "/v1/chat/completions",
         json={
             "model": "best",
             "messages": [{"role": "user", "content": "Hello!"}],
         },
     )
+    assert response.status_code == 504
     # The resolved model should be banned
     horde = app.state.horde
     assert len(horde._banned_models) > 0

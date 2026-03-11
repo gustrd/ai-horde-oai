@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import Callable, Coroutine
 from typing import Any, Protocol, TypeVar, runtime_checkable
@@ -40,6 +41,18 @@ class HordeCorruptPromptError(Exception):
     pass
 
 
+class HordeNoModelsRemainingError(Exception):
+    """Raised when all available models for an alias have been exhausted via retries."""
+    pass
+
+
+async def _call_maybe_async(fn: Callable[[], Any]) -> None:
+    """Call *fn* and await the result if it returns a coroutine."""
+    result = fn()
+    if inspect.isawaitable(result):
+        await result
+
+
 async def with_retry(
     submit_fn: Callable[[], Coroutine[Any, Any, str]],
     poll_fn: Callable[[str], Coroutine[Any, Any, StatusT]],
@@ -48,7 +61,7 @@ async def with_retry(
     timeout_seconds: int = 300,
     broaden_on_retry: bool = True,
     backoff_base: float = 2.0,
-    on_broaden: Callable[[], None] | None = None,
+    on_broaden: Callable[[], Any] | None = None,
     on_status: Callable[[Any], None] | None = None,
     on_submit: Callable[[str], None] | None = None,
     poll_interval: float = 2.0,
@@ -77,15 +90,26 @@ async def with_retry(
         HordeTimeoutError: All attempts exhausted without a result.
     """
     last_exc: Exception | None = None
+    is_impossible_retry = False
 
-    for attempt in range(1 + max_retries):
-        if attempt > 0:
-            # Exponential backoff before retrying
-            backoff = backoff_base * (2 ** (attempt - 1))
+    attempts_used = 0
+
+    while is_impossible_retry or attempts_used <= max_retries:
+        if attempts_used > 0 or is_impossible_retry:
+            # Exponential backoff before retrying, unless it was an "impossible" error
+            # which we retry after exactly 2 seconds (DEFAULT RETRY INTERVAL).
+            _was_impossible = is_impossible_retry
+            if is_impossible_retry:
+                backoff = 2.0
+                is_impossible_retry = False
+            else:
+                backoff = backoff_base * (2 ** (attempts_used - 1))
             await asyncio.sleep(backoff)
 
-            if broaden_on_retry and on_broaden:
-                on_broaden()
+            # Always call on_broaden for impossible retries (ban + re-resolve the model);
+            # also call it for normal retries when broaden_on_retry is enabled.
+            if on_broaden and (_was_impossible or broaden_on_retry):
+                await _call_maybe_async(on_broaden)
 
         job_id: str | None = None
         try:
@@ -118,15 +142,23 @@ async def with_retry(
             # Timed out on this attempt
             if job_id:
                 await cancel_fn(job_id)
-            last_exc = HordeTimeoutError(f"Attempt {attempt + 1} timed out after {timeout_seconds}s")
+            last_exc = HordeTimeoutError(f"Attempt {attempts_used + 1} timed out after {timeout_seconds}s")
+            attempts_used += 1
+            is_impossible_retry = False
 
-        except HordeImpossibleError:
-            raise  # propagate immediately — no point retrying with same model
+        except HordeImpossibleError as exc:
+            if job_id:
+                await cancel_fn(job_id)
+            last_exc = exc
+            is_impossible_retry = True
+            # DO NOT increment attempts_used so we keep retrying until no models remain.
 
         except HordeJobFailed as exc:
             if job_id:
                 await cancel_fn(job_id)
             last_exc = exc
+            attempts_used += 1
+            is_impossible_retry = False
 
         except HordeError as exc:
             # CorruptPrompt must never be retried — each attempt adds suspicion.
@@ -136,6 +168,8 @@ async def with_retry(
             # Treat it as a job failure so with_retry can move on to the next attempt.
             if exc.status_code == 404:
                 last_exc = HordeJobFailed(f"Job {job_id} not found (404): {exc.message}")
+                attempts_used += 1
+                is_impossible_retry = False
             else:
                 raise
 

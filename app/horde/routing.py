@@ -60,7 +60,7 @@ class ModelRouter:
         if alias == "default":
             if cfg.default_model:
                 return cfg.default_model
-            return self._pick_best(models, cfg)
+            return self._pick_fast(models, cfg)
 
         # Unknown alias — pass through as-is (may be a direct Horde model name)
         return alias

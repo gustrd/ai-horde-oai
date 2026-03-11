@@ -18,6 +18,7 @@ from app.horde.client import HordeClient, HordeError, HordeIPTimeoutError, Horde
 from app.horde.retry import (
     HordeCorruptPromptError,
     HordeImpossibleError,
+    HordeNoModelsRemainingError,
     HordeTimeoutError,
     with_retry,
 )
@@ -158,8 +159,30 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
     )
 
+    _current_real_model = real_model
+    _current_horde_req = horde_req
+
+    async def _on_broaden():
+        nonlocal _current_real_model, _current_horde_req
+        # Ban the model that just failed
+        horde.ban_model(_current_real_model, duration=3600.0)
+        try:
+            _models = await horde.get_enriched_models()
+            _new_model = await model_router.resolve(body.model, _models, config=config)
+            if _new_model != _current_real_model:
+                logger.info("re-resolved %r -> %r after failure", body.model, _new_model)
+                _current_real_model = _new_model
+                _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+        except Exception as e:
+            logger.warning("failed to re-resolve alias %r: %s", body.model, e)
+            raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}") from e
+
     for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
         _attempt_start = time.monotonic()
+
+        # Delay between retry attempts (P1-B) for tool/empty failures
+        if _attempt > 0 and config.retry.streaming_retry_delay > 0:
+            await asyncio.sleep(config.retry.streaming_retry_delay)
 
         def _on_submit(job_id: str) -> None:
             if active_req is not None:
@@ -168,13 +191,14 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         try:
             async with _sem:
                 status = await with_retry(
-                    submit_fn=lambda: horde.submit_text_job(horde_req),
+                    submit_fn=lambda: horde.submit_text_job(_current_horde_req),
                     poll_fn=horde.poll_text_status,
                     cancel_fn=horde.cancel_text_job,
                     max_retries=config.retry.max_retries,
                     timeout_seconds=config.retry.timeout_seconds,
                     broaden_on_retry=config.retry.broaden_on_retry,
                     backoff_base=config.retry.backoff_base,
+                    on_broaden=_on_broaden,
                     on_submit=_on_submit,
                 )
         except HordeCorruptPromptError as e:
@@ -182,7 +206,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             request.state.log_extras = {
                 "status": 400,
                 "model": body.model,
-                "real_model": real_model,
+                "real_model": _current_real_model,
                 "messages": log_messages,
                 "error": err,
             }
@@ -192,18 +216,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             request.state.log_extras = {
                 "status": 503,
                 "model": body.model,
-                "real_model": real_model,
-                "messages": log_messages,
-                "error": err,
-            }
-            raise HTTPException(status_code=503, detail=err)
-        except HordeImpossibleError as e:
-            horde.ban_model(real_model, duration=3600.0)
-            err = f"Model {real_model!r} has no active workers on AI Horde"
-            request.state.log_extras = {
-                "status": "unav.",
-                "model": body.model,
-                "real_model": real_model,
+                "real_model": _current_real_model,
                 "messages": log_messages,
                 "error": err,
             }
@@ -211,7 +224,15 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         except HordeTimeoutError as e:
             request.state.log_extras = {
                 "model": body.model,
-                "real_model": real_model,
+                "real_model": _current_real_model,
+                "messages": log_messages,
+                "error": str(e),
+            }
+            raise HTTPException(status_code=504, detail=str(e))
+        except HordeNoModelsRemainingError as e:
+            request.state.log_extras = {
+                "model": body.model,
+                "real_model": _current_real_model,
                 "messages": log_messages,
                 "error": str(e),
             }
@@ -219,12 +240,13 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         except HordeError as e:
             request.state.log_extras = {
                 "model": body.model,
-                "real_model": real_model,
+                "real_model": _current_real_model,
                 "messages": log_messages,
                 "error": e.message,
             }
             raise _horde_error(e)
 
+        real_model = _current_real_model  # update for logging
         gen = status.generations[0] if status.generations else None
         reasoning_content, response_text = _split_thinking(gen.text if gen else "")
         _attempt_dur = time.monotonic() - _attempt_start
@@ -347,7 +369,9 @@ async def _stream_chat(
         _stream_input_tokens = sum(
             estimate_tokens(str(m.get("content", ""))) for m in (log_messages or [])
         )
-        for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
+        
+        _attempt = 0
+        while _attempt <= _TOOL_FORMAT_MAX_RETRIES:
             _attempt_start = time.monotonic()
 
             # Delay between retry attempts (P1-B)
@@ -451,11 +475,13 @@ async def _stream_chat(
                         _fallback_model = await model_router.resolve(alias, _fb_models, config=config)
                     except Exception:
                         _fallback_model = None
-                if _fallback_model and _fallback_model != real_model and _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                if _fallback_model and _fallback_model != real_model:
                     real_model = _fallback_model
                     horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
-                    continue  # retry with new model
+                    # Delay before retry (DEFAULT RETRY INTERVAL)
+                    await asyncio.sleep(2.0)
+                    continue  # retry with new model without incrementing _attempt
                 # No fallback available — fail with clear message
                 response_text = f"[MODEL_UNAVAILABLE: {real_model} has no active workers on AI Horde]"
                 status_code = "unav."
@@ -490,9 +516,9 @@ async def _stream_chat(
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                     if request is not None and gen is not None:
                         _log_retry(request, alias, real_model, gen, kudos,
-                                   log_messages, _stream_input_tokens, _attempt_dur, "empty response",
                                    tool_info=f"raw_len={raw_len} worker={worker_name}",
                                    response_text=gen.text)
+                    _attempt += 1
                     continue
                 response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {raw_len} chars]"
 
@@ -518,11 +544,14 @@ async def _stream_chat(
                             _log_retry(request, alias, real_model, gen, kudos,
                                        log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format",
                                        tool_info=_tool_info, response_text=response_text)
+                        _attempt += 1
                         continue
                     response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
                 else:
                     _tool_info = f"not detected: plain text response (fmt={tools_fmt})"
                     logger.info("tool call not detected (stream): treating as text fmt=%s response=%r", tools_fmt, _snippet)
+            
+            _attempt += 1
             break
 
         job_done = True

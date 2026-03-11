@@ -78,6 +78,16 @@ OpenAI-style `tools` and `tool_choice` are supported. Tools are injected into th
 
 `max_concurrent_requests` limits how many Horde jobs are in flight at once (default: 3). This applies to all generation endpoints. Set to `0` to disable the limit. Requires a server restart to take effect.
 
+## Retry & Reliability
+
+The proxy implements sophisticated retry logic to ensure high reliability despite Horde's distributed nature:
+
+- **Unavailable Models**: If Horde reports `is_possible=False` (no active workers for the model), the proxy automatically bans that specific model locally for **1 hour**, enforcing a 2-second delay, and automatically fallbacks to the next best model for the requested alias. This retry loop **bypasses standard retry limits** and continues until a suitable model is found and successfully finishes a job, or until all models for that alias have been exhausted.
+- **Exponential Backoff**: Normal job failures (faults, timeouts) use exponential backoff (`2s, 4s, 8s...`).
+- **Streaming Resilience**: Streaming connections track progress; if a job stalls (no queue change), it is automatically cancelled and retried.
+- **Tool Formatting**: Malformed tool-call responses are automatically retried up to 3 times.
+- **Global Request Delay**: To prevent account flags due to concurrent burst traffic, the proxy enforces an absolute minimum delay (default: **2.0s**) between any two hits to the Horde API across all clients and models.
+
 ## Docker
 
 ```bash

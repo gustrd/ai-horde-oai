@@ -35,28 +35,29 @@ class HordeUnsafeIPError(Exception):
     pass
 
 
-class _TokenBucket:
-    """Async token bucket — limits submission rate to *rate* requests/second."""
 
-    def __init__(self, rate: float):
-        self._rate = max(rate, 0.0)
-        self._tokens: float = 1.0
-        self._last: float = time.monotonic()
+class _GlobalDelay:
+    """Ensures an absolute minimum time delay between any two API requests."""
+    """Ensures an absolute minimum time delay between any two API requests."""
+
+    def __init__(self, delay: float):
+        self.delay = max(delay, 0.0)
+        self._last_request_time: float = 0.0
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> None:
-        if self._rate <= 0:
-            return  # unlimited
+    async def wait(self) -> None:
+        if self.delay <= 0:
+            return
+
         async with self._lock:
             now = time.monotonic()
-            self._tokens = min(1.0, self._tokens + (now - self._last) * self._rate)
-            self._last = now
-            if self._tokens < 1.0:
-                wait = (1.0 - self._tokens) / self._rate
-                await asyncio.sleep(wait)
-                self._tokens = 0.0
-            else:
-                self._tokens -= 1.0
+            elapsed = now - self._last_request_time
+            if elapsed < self.delay:
+                await asyncio.sleep(self.delay - elapsed)
+
+            # Update the timestamp AFTER the sleep finishes to correctly
+            # space out staggered requests.
+            self._last_request_time = time.monotonic()
 
 
 class HordeClient:
@@ -68,7 +69,7 @@ class HordeClient:
         timeout: float = 30.0,
         model_cache_ttl: int = 60,
         rate_limit_backoff: float = 5.0,
-        max_requests_per_second: float = 1.0,
+        global_min_request_delay: float = 2.0,
     ):
         self.api_key = api_key
         self._model_cache_ttl = model_cache_ttl
@@ -86,8 +87,8 @@ class HordeClient:
         self._rate_limited_until: float = 0.0
         self._rate_limit_backoff = rate_limit_backoff
 
-        # Token-bucket rate limiter (P2-A)
-        self._rate_limiter = _TokenBucket(rate=max_requests_per_second)
+        # Global request delayer
+        self._global_delay = _GlobalDelay(delay=global_min_request_delay)
         self.http = httpx.AsyncClient(
             base_url=base_url,
             headers={
@@ -100,6 +101,11 @@ class HordeClient:
 
     async def close(self) -> None:
         await self.http.aclose()
+
+    async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Central HTTP dispatcher enforcing global API delay."""
+        await self._global_delay.wait()
+        return await self.http.request(method, url, **kwargs)
 
     def check_ip_block(self) -> None:
         """Raise immediately if the IP is in a local cooldown (TimeoutIP / UnsafeIP)."""
@@ -156,7 +162,7 @@ class HordeClient:
         now = time.monotonic()
         if self._model_cache and now < self._model_cache_expires:
             return self._filter_banned(self._model_cache)
-        r = self._check(await self.http.get("/v2/status/models", params={"type": type}))
+        r = self._check(await self._request("GET", "/v2/status/models", params={"type": type}))
         models = [HordeModel(**m) for m in r.json()]
         self._model_cache = models
         self._model_cache_expires = now + self._model_cache_ttl
@@ -172,6 +178,11 @@ class HordeClient:
         self._banned_models[name] = time.monotonic() + duration
         self._model_cache = [m for m in self._model_cache if m.name != name]
         self._enriched_cache = [m for m in self._enriched_cache if m.name != name]
+
+    def unban_all_models(self) -> None:
+        """Clear all local model bans and invalidate caches."""
+        self._banned_models.clear()
+        self.invalidate_model_cache()
 
     def _filter_banned(self, models: list[HordeModel]) -> list[HordeModel]:
         """Remove currently-banned models, cleaning up expired bans as a side-effect."""
@@ -226,19 +237,19 @@ class HordeClient:
         return self._filter_banned(models)
 
     async def get_text_workers(self) -> list[dict]:
-        r = self._check(await self.http.get("/v2/workers", params={"type": "text"}))
+        r = self._check(await self._request("GET", "/v2/workers", params={"type": "text"}))
         return r.json()
 
     async def get_user(self) -> HordeUser:
-        r = self._check(await self.http.get("/v2/find_user"))
+        r = self._check(await self._request("GET", "/v2/find_user"))
         return HordeUser(**r.json())
 
     async def submit_text_job(self, payload: HordeTextRequest) -> str:
         self.check_ip_block()
         await self._wait_rate_limit()
-        await self._rate_limiter.acquire()
         r = self._check(
-            await self.http.post(
+            await self._request(
+                "POST",
                 "/v2/generate/text/async",
                 content=payload.model_dump_json(exclude_none=True),
             )
@@ -246,21 +257,21 @@ class HordeClient:
         return r.json()["id"]
 
     async def poll_text_status(self, job_id: str) -> HordeJobStatus:
-        r = self._check(await self.http.get(f"/v2/generate/text/status/{job_id}"))
+        r = self._check(await self._request("GET", f"/v2/generate/text/status/{job_id}"))
         return HordeJobStatus(**r.json())
 
     async def cancel_text_job(self, job_id: str) -> None:
         try:
-            await self.http.delete(f"/v2/generate/text/status/{job_id}")
+            await self._request("DELETE", f"/v2/generate/text/status/{job_id}")
         except Exception:
             pass
 
     async def submit_image_job(self, payload: HordeImageRequest) -> str:
         self.check_ip_block()
         await self._wait_rate_limit()
-        await self._rate_limiter.acquire()
         r = self._check(
-            await self.http.post(
+            await self._request(
+                "POST",
                 "/v2/generate/async",
                 content=payload.model_dump_json(exclude_none=True),
             )
@@ -268,11 +279,11 @@ class HordeClient:
         return r.json()["id"]
 
     async def poll_image_status(self, job_id: str) -> HordeImageStatus:
-        r = self._check(await self.http.get(f"/v2/generate/status/{job_id}"))
+        r = self._check(await self._request("GET", f"/v2/generate/status/{job_id}"))
         return HordeImageStatus(**r.json())
 
     async def cancel_image_job(self, job_id: str) -> None:
         try:
-            await self.http.delete(f"/v2/generate/status/{job_id}")
+            await self._request("DELETE", f"/v2/generate/status/{job_id}")
         except Exception:
             pass

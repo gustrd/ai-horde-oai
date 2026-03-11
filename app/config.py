@@ -58,7 +58,7 @@ class Settings(BaseModel):
     max_concurrent_requests: int = 3  # max simultaneous Horde jobs; 0 = unlimited
 
     # Model alias mapping
-    default_model: str = "best"
+    default_model: str = "fast"
     model_aliases: dict[str, str] = Field(default_factory=dict)
 
     # Model filters
@@ -72,7 +72,7 @@ class Settings(BaseModel):
     worker_whitelist: list[str] = Field(default_factory=list)
     worker_blocklist: list[str] = Field(default_factory=list)
 
-    max_requests_per_second: float = 1.0  # token-bucket rate for generate endpoints; 0 = unlimited
+    global_min_request_delay: float = 2.0 # absolute minimum seconds between any two Horde API hits; 0 = unlimited
 
     retry: RetrySettings = Field(default_factory=RetrySettings)
     image_defaults: ImageDefaults = Field(default_factory=ImageDefaults)

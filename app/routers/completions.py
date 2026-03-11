@@ -39,21 +39,37 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
     horde_req = completion_to_horde(body, real_model, config)
     _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
 
+    _current_real_model = real_model
+    _current_horde_req = horde_req
+
+    async def _on_broaden():
+        nonlocal _current_real_model, _current_horde_req
+        horde.ban_model(_current_real_model, duration=3600.0)
+        try:
+            _models = await horde.get_enriched_models()
+            _new_model = await model_router.resolve(body.model, _models, config=config)
+            if _new_model != _current_real_model:
+                _current_real_model = _new_model
+                _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+        except Exception:
+            pass
+
     try:
         async with _sem:
             status = await with_retry(
-                submit_fn=lambda: horde.submit_text_job(horde_req),
+                submit_fn=lambda: horde.submit_text_job(_current_horde_req),
                 poll_fn=horde.poll_text_status,
                 cancel_fn=horde.cancel_text_job,
                 max_retries=config.retry.max_retries,
                 timeout_seconds=config.retry.timeout_seconds,
                 broaden_on_retry=config.retry.broaden_on_retry,
                 backoff_base=config.retry.backoff_base,
+                on_broaden=_on_broaden,
             )
     except HordeTimeoutError as e:
         request.state.log_extras = {
             "model": body.model,
-            "real_model": real_model,
+            "real_model": _current_real_model,
             "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
             "error": str(e),
         }
@@ -61,12 +77,13 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
     except HordeError as e:
         request.state.log_extras = {
             "model": body.model,
-            "real_model": real_model,
+            "real_model": _current_real_model,
             "prompt": body.prompt if isinstance(body.prompt, str) else str(body.prompt),
             "error": e.message,
         }
         raise _horde_error(e)
 
+    real_model = _current_real_model
     gen = status.generations[0] if status.generations else None
     prompt_str = body.prompt if isinstance(body.prompt, str) else str(body.prompt)
     response_text = gen.text if gen else ""

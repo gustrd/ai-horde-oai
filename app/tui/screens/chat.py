@@ -98,10 +98,8 @@ class ChatScreen(Screen):
         )
         
         if is_empty:
-            if self.app.selected_model:
-                current_val = self.app.selected_model
-            elif cfg.default_model:
-                current_val = cfg.default_model
+            # Priority: 1. Session selection from Models screen, 2. Global config default, 3. 'fast' hard fallback
+            current_val = self.app.selected_model or cfg.default_model or "fast"
         
         # Ensure the selected model is in the options
         option_values = [opt[1] for opt in options]

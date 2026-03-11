@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
         client_agent=config.client_agent,
         model_cache_ttl=config.model_cache_ttl,
         rate_limit_backoff=config.retry.rate_limit_backoff,
-        max_requests_per_second=config.max_requests_per_second,
+        global_min_request_delay=config.global_min_request_delay,
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)
@@ -77,7 +77,13 @@ def create_app(config: Settings | None = None) -> FastAPI:
     async def log_requests(request: Request, call_next) -> Response:
         start = time.monotonic()
 
-        if request.url.path.startswith("/v1/"):
+        LOG_PATHS = {
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/images/generations",
+        }
+
+        if request.url.path in LOG_PATHS:
             start_callback = getattr(request.app.state, "start_callback", None)
             if start_callback is not None:
                 try:
@@ -109,9 +115,14 @@ def create_app(config: Settings | None = None) -> FastAPI:
             duration * 1000,
         )
 
-        # Only log /v1/ API routes; skip health checks and other system paths.
+        # Only log generation endpoints; skip health checks, model lists, and other system paths.
         # Streaming routes set log_extras["_streaming"] = True and log themselves.
-        if request.url.path.startswith("/v1/"):
+        LOG_PATHS = {
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/images/generations",
+        }
+        if request.url.path in LOG_PATHS:
             extras: dict = getattr(request.state, "log_extras", {})
             if not extras.get("_streaming"):
                 try:

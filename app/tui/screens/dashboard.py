@@ -7,7 +7,8 @@ from datetime import datetime
 from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Label, Static
+from textual.widgets import Button, Footer, Header, Label, Static
+from textual.containers import Horizontal
 
 from app.tui.widgets.kudos_bar import KudosBar
 
@@ -54,6 +55,14 @@ class DashboardScreen(Screen):
     DashboardScreen #kudos-bar {
         dock: bottom;
     }
+    DashboardScreen #action-row {
+        height: auto;
+        margin: 0 1;
+        align: right middle;
+    }
+    DashboardScreen #unban-btn {
+        margin-right: 1;
+    }
     """
 
     models_count: reactive[int] = reactive(0)
@@ -73,6 +82,8 @@ class DashboardScreen(Screen):
             yield Label("", id="request-stats", classes="stat-row", markup=False)
             yield Label("", id="session-stats", classes="stat-row", markup=False)
             yield Label("", id="last-request", classes="stat-row-last", markup=False)
+        with Horizontal(id="action-row"):
+            yield Button("Unban Unavailable Models", id="unban-btn", variant="error")
         yield KudosBar(id="kudos-bar")
         yield Footer()
 
@@ -219,3 +230,11 @@ class DashboardScreen(Screen):
         self.query_one("#horde-status", Label).update("  Horde   : loading…")
         self.query_one("#model-stats", Label).update("  Models  : loading…")
         self.run_worker(self._load_horde_stats(), exclusive=True, name="dashboard-stats")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "unban-btn":
+            horde = getattr(self.app, "horde", None)
+            if horde:
+                horde.unban_all_models()
+                self.notify("Unavailable model bans cleared")
+                self.action_refresh()

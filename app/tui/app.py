@@ -77,6 +77,7 @@ class HordeApp(App):
             base_url=self.config.horde_api_url,
             api_key=self.config.horde_api_key,
             client_agent=self.config.client_agent,
+            global_min_request_delay=self.config.global_min_request_delay,
         )
 
         if self._start_server:
@@ -189,6 +190,7 @@ class HordeApp(App):
             base_url=new_config.horde_api_url,
             api_key=new_config.horde_api_key,
             client_agent=new_config.client_agent,
+            global_min_request_delay=new_config.global_min_request_delay,
         )
         self.switch_screen("dashboard")
 

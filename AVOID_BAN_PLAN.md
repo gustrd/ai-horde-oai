@@ -22,15 +22,14 @@ retry:
   rate_limit_backoff: 5.0   # seconds to freeze after a 429 (default; Retry-After overrides)
 ```
 
-### 1.2 Token-bucket rate limiter (pre-emptive) ✅
+### 1.2 Global request delay (pre-emptive) ✅
 
-**Implemented:** `_TokenBucket` class in `client.py` gates all `submit_*_job` calls.
-`max_requests_per_second=1.0` by default — well under Horde's 2 req/s per-key limit.
-Set to `0.0` to disable.
+**Implemented:** `_GlobalDelay` class in `client.py` gates ALL API requests (status,
+models, submission, etc.). Default is `global_min_request_delay=2.0`.
 
-**Config fields added:**
+**Config field:**
 ```yaml
-max_requests_per_second: 1.0   # 0 = unlimited
+global_min_request_delay: 2.0  # absolute minimum seconds between ANY two API hits
 ```
 
 **Files:** `app/horde/client.py`, `app/config.py`, `app/main.py`
@@ -118,18 +117,21 @@ submission rate.
 
 ## 5. Model Unavailability Handling (AVOID_BAN §10)
 
-### 5.1 Model ban + streaming alias re-resolve ✅
+### 5.1 Model ban + alias re-resolve ✅
 
 **Implemented:**
 - `is_possible=False` → `horde.ban_model(real_model, duration=3600.0)` excludes the
   model from future alias resolution for 1 h.
+- **Availability Retries**: Retries due to model unavailability (`is_possible=False`) 
+  do not count towards `max_retries`. The proxy will cycle through fallback models
+  indefinitely until a successful submission occurs or all models for the alias 
+  are exhausted.
 - **Streaming path:** after banning, attempts to re-resolve the alias against the
-  filtered model list. If a different model is available and retry budget remains,
-  submits with the new model transparently.
-- **Non-streaming path:** bans the model and returns HTTP 503. No inline re-resolve
-  (the next request will naturally resolve to a different model via the ban).
+  filtered model list. Yields `x-horde-resolved` chunk and retries with a 2s delay.
+- **Non-streaming path:** after banning, attempts to re-resolve the alias mid-request 
+  and retries. 
 
-**Files:** `app/routers/chat.py`, `app/horde/client.py`
+**Files:** `app/routers/chat.py`, `app/horde/client.py`, `app/horde/retry.py`
 
 ---
 
@@ -177,7 +179,7 @@ any Horde requests are made.
 | **P1** | 429 cooldown recording | ✅ Done | `test_rate_limit_cooldown_recorded` |
 | **P1** | Streaming retry delay | ✅ Done | `test_stream_chat_retry_delay_applied` |
 | **P1** | Re-resolve alias on model ban (streaming) | ✅ Done | `test_stream_chat_impossible_fallback_to_new_model` |
-| **P2** | Token-bucket rate limiter | ✅ Done | `test_token_bucket_*` (3 tests) |
+| **P2** | Global request delay | ✅ Done | `test_stream_chat_retry_delay_applied` |
 | **P2** | `HordeUser.suspicion` field | ✅ Done | `test_horde_user_suspicion_*` (2 tests) |
 | **P3** | Client agent validation | ✅ Done | `test_client_agent_*` (4 tests) |
 | **P3** | Prompt pre-screening | 🔲 Not started | — |
@@ -326,7 +328,7 @@ retry:
   rate_limit_backoff: 5.0       # NEW: seconds to freeze after a 429
   streaming_retry_delay: 2.0    # NEW: seconds between streaming retry attempts
 
-max_requests_per_second: 1.0    # NEW: token-bucket rate; 0 = unlimited
+global_min_request_delay: 2.0   # absolute minimum seconds between ANY two API hits
 client_agent: "ai-horde-oai:0.1:github"   # validated at startup
 
 # Planned:
