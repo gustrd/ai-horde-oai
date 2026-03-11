@@ -42,6 +42,7 @@ class RequestLogEntry:
     checked: bool = False          # user-toggled read/checked flag
     tool_info: str = ""            # tool call detection result / retry reason
     job_id: str = ""               # Horde job UUID
+    raw_response_text: str = ""    # original unedited response from AI
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ def entry_to_dict(entry: RequestLogEntry) -> dict:
         "checked": entry.checked,
         "tool_info": entry.tool_info,
         "job_id": entry.job_id,
+        "raw_response_text": entry.raw_response_text,
     }
     return d
 
@@ -114,6 +116,7 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
         checked=bool(d.get("checked", False)),
         tool_info=d.get("tool_info", ""),
         job_id=d.get("job_id", ""),
+        raw_response_text=d.get("raw_response_text", ""),
     )
 
 
