@@ -306,13 +306,17 @@ class LogsScreen(Screen):
         log = self.app.request_log
         table.clear()
         for entry in reversed(log):
+            model_display = entry.model or ""
+            if entry.real_model and entry.real_model != entry.model:
+                model_display = f"{entry.model} ({entry.real_model})"
+            
             preview = (entry.response_text or entry.error or "").replace("\n", " ")[:60]
             table.add_row(
                 "*" if entry.checked else " ",
                 entry.timestamp.strftime("%H:%M:%S"),
                 str(entry.status),
                 f"{entry.duration:.1f}s",
-                (entry.model or "")[:15],
+                model_display[:30],
                 f"{entry.kudos:.1f}" if entry.kudos else "—",
                 f"{entry.input_tokens}>{entry.output_tokens}" if (entry.input_tokens or entry.output_tokens) else "—",
                 preview,
