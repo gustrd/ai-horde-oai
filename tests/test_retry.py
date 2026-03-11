@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.horde.retry import HordeTimeoutError, with_retry
+from app.horde.client import HordeClient, HordeError, HordeIPTimeoutError, HordeUnsafeIPError
+from app.horde.retry import HordeCorruptPromptError, HordeTimeoutError, with_retry
 from app.schemas.horde import HordeGeneration, HordeImageGeneration, HordeImageStatus, HordeJobStatus
 
 
-pytestmark = pytest.mark.asyncio
 
 
 def _done_text_status():
@@ -205,6 +205,191 @@ async def test_done_but_no_generations():
             submit_fn, poll_fn, cancel_fn,
             max_retries=0, poll_interval=0, backoff_base=0
         )
+
+
+async def test_horde_404_treated_as_job_failure():
+    """HordeError 404 during polling is treated as job failure, allowing retry."""
+    submit_fn = AsyncMock(return_value="job-404")
+    poll_fn = AsyncMock(side_effect=HordeError(404, "not found"))
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(HordeTimeoutError):
+        await with_retry(
+            submit_fn, poll_fn, cancel_fn,
+            max_retries=1, poll_interval=0, backoff_base=0
+        )
+
+    assert submit_fn.await_count == 2  # retried after 404
+
+
+async def test_horde_non_404_error_propagates():
+    """HordeError with non-404 status propagates immediately."""
+    submit_fn = AsyncMock(return_value="job-500")
+    poll_fn = AsyncMock(side_effect=HordeError(500, "server error"))
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(HordeError) as exc_info:
+        await with_retry(submit_fn, poll_fn, cancel_fn, max_retries=2, poll_interval=0)
+
+    assert exc_info.value.status_code == 500
+    submit_fn.assert_awaited_once()  # did not retry
+
+
+async def test_corrupt_prompt_propagates_immediately():
+    """CorruptPrompt error propagates immediately without retrying."""
+    submit_fn = AsyncMock(side_effect=HordeError(400, "Prompt is corrupt", rc="CorruptPrompt"))
+    poll_fn = AsyncMock()
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(HordeCorruptPromptError):
+        await with_retry(submit_fn, poll_fn, cancel_fn, max_retries=2, poll_interval=0, backoff_base=0)
+
+    submit_fn.assert_awaited_once()  # no retry
+    poll_fn.assert_not_awaited()
+
+
+async def test_corrupt_prompt_no_cancel():
+    """CorruptPrompt never has a job_id so cancel_fn is not called."""
+    submit_fn = AsyncMock(side_effect=HordeError(400, "Corrupt", rc="CorruptPrompt"))
+    poll_fn = AsyncMock()
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(HordeCorruptPromptError):
+        await with_retry(submit_fn, poll_fn, cancel_fn, max_retries=1, poll_interval=0, backoff_base=0)
+
+    cancel_fn.assert_not_awaited()
+
+
+async def test_ip_block_raises_immediately():
+    """HordeIPTimeoutError in submit raises immediately without retry."""
+    submit_fn = AsyncMock(side_effect=HordeIPTimeoutError("IP banned", duration_hint=60.0))
+    poll_fn = AsyncMock()
+    cancel_fn = AsyncMock()
+
+    with pytest.raises(HordeIPTimeoutError):
+        await with_retry(submit_fn, poll_fn, cancel_fn, max_retries=2, poll_interval=0, backoff_base=0)
+
+    submit_fn.assert_awaited_once()  # not retried (propagates like any non-HordeError)
+
+
+def test_horde_error_has_rc():
+    """HordeError carries rc field."""
+    e = HordeError(400, "bad request", rc="CorruptPrompt")
+    assert e.rc == "CorruptPrompt"
+    assert e.status_code == 400
+    assert e.message == "bad request"
+
+
+def test_horde_error_default_rc():
+    """HordeError rc defaults to empty string."""
+    e = HordeError(500, "error")
+    assert e.rc == ""
+
+
+def test_check_ip_block_not_blocked():
+    """check_ip_block() does nothing when no block is active."""
+    import httpx
+    horde = HordeClient(
+        base_url="https://aihorde.net/api",
+        api_key="test",
+        client_agent="test:0.1:test",
+        max_requests_per_second=0.0,
+    )
+    horde.check_ip_block()  # should not raise
+
+
+def test_check_ip_block_timeout_ip():
+    """check_ip_block() raises HordeIPTimeoutError when cooldown is active."""
+    import time
+    import httpx
+    horde = HordeClient(
+        base_url="https://aihorde.net/api",
+        api_key="test",
+        client_agent="test:0.1:test",
+        max_requests_per_second=0.0,
+    )
+    horde._ip_blocked_until = time.monotonic() + 3600.0
+    horde._ip_block_reason = "TimeoutIP"
+
+    with pytest.raises(HordeIPTimeoutError):
+        horde.check_ip_block()
+
+
+def test_check_ip_block_unsafe_ip():
+    """check_ip_block() raises HordeUnsafeIPError when VPN block is active."""
+    import time
+    horde = HordeClient(
+        base_url="https://aihorde.net/api",
+        api_key="test",
+        client_agent="test:0.1:test",
+        max_requests_per_second=0.0,
+    )
+    horde._ip_blocked_until = time.monotonic() + 21600.0
+    horde._ip_block_reason = "UnsafeIP"
+
+    with pytest.raises(HordeUnsafeIPError):
+        horde.check_ip_block()
+
+
+def test_check_ip_block_expired():
+    """check_ip_block() does not raise when the cooldown has elapsed."""
+    import time
+    horde = HordeClient(
+        base_url="https://aihorde.net/api",
+        api_key="test",
+        client_agent="test:0.1:test",
+        max_requests_per_second=0.0,
+    )
+    horde._ip_blocked_until = time.monotonic() - 1.0  # already expired
+    horde._ip_block_reason = "TimeoutIP"
+
+    horde.check_ip_block()  # should not raise
+
+
+async def test_token_bucket_unlimited_when_rate_zero():
+    """_TokenBucket with rate=0 never sleeps."""
+    from app.horde.client import _TokenBucket
+    bucket = _TokenBucket(rate=0.0)
+    sleep_calls = []
+
+    async def _fake_sleep(t):
+        sleep_calls.append(t)
+
+    import unittest.mock
+    with unittest.mock.patch("app.horde.client.asyncio.sleep", side_effect=_fake_sleep):
+        for _ in range(5):
+            await bucket.acquire()
+
+    assert sleep_calls == []  # no rate limiting when rate=0
+
+
+async def test_token_bucket_high_rate_no_sleep():
+    """_TokenBucket with high rate doesn't sleep on first acquisition."""
+    from app.horde.client import _TokenBucket
+    bucket = _TokenBucket(rate=1000.0)
+    sleep_calls = []
+
+    async def _fake_sleep(t):
+        sleep_calls.append(t)
+
+    import unittest.mock
+    with unittest.mock.patch("app.horde.client.asyncio.sleep", side_effect=_fake_sleep):
+        await bucket.acquire()
+
+    assert sleep_calls == []  # first token is immediately available
+
+
+async def test_horde_client_has_rate_limiter():
+    """HordeClient initializes with a token bucket rate limiter."""
+    horde = HordeClient(
+        base_url="https://aihorde.net/api",
+        api_key="test",
+        client_agent="test:0.1:test",
+        max_requests_per_second=2.0,
+    )
+    from app.horde.client import _TokenBucket
+    assert isinstance(horde._rate_limiter, _TokenBucket)
+    await horde.close()
 
 
 async def test_cancelled_error_cancels_job_and_reraises():

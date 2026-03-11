@@ -16,10 +16,47 @@ from app.schemas.horde import (
 
 
 class HordeError(Exception):
-    def __init__(self, status_code: int, message: str):
+    def __init__(self, status_code: int, message: str, rc: str = ""):
         self.status_code = status_code
         self.message = message
+        self.rc = rc
         super().__init__(message)
+
+
+class HordeIPTimeoutError(Exception):
+    """IP is in Horde's Fibonacci timeout cooldown."""
+    def __init__(self, message: str, duration_hint: float = 3600.0):
+        self.duration_hint = duration_hint
+        super().__init__(message)
+
+
+class HordeUnsafeIPError(Exception):
+    """IP flagged as VPN/proxy by Horde."""
+    pass
+
+
+class _TokenBucket:
+    """Async token bucket — limits submission rate to *rate* requests/second."""
+
+    def __init__(self, rate: float):
+        self._rate = max(rate, 0.0)
+        self._tokens: float = 1.0
+        self._last: float = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        if self._rate <= 0:
+            return  # unlimited
+        async with self._lock:
+            now = time.monotonic()
+            self._tokens = min(1.0, self._tokens + (now - self._last) * self._rate)
+            self._last = now
+            if self._tokens < 1.0:
+                wait = (1.0 - self._tokens) / self._rate
+                await asyncio.sleep(wait)
+                self._tokens = 0.0
+            else:
+                self._tokens -= 1.0
 
 
 class HordeClient:
@@ -30,6 +67,8 @@ class HordeClient:
         client_agent: str,
         timeout: float = 30.0,
         model_cache_ttl: int = 60,
+        rate_limit_backoff: float = 5.0,
+        max_requests_per_second: float = 1.0,
     ):
         self.api_key = api_key
         self._model_cache_ttl = model_cache_ttl
@@ -37,6 +76,18 @@ class HordeClient:
         self._model_cache_expires: float = 0.0
         self._enriched_cache: list[HordeModel] = []
         self._enriched_cache_expires: float = 0.0
+        self._banned_models: dict[str, float] = {}  # name → expiry (monotonic)
+
+        # IP block state (P0-B)
+        self._ip_blocked_until: float = 0.0
+        self._ip_block_reason: str = ""
+
+        # Rate-limit cooldown (P1-A)
+        self._rate_limited_until: float = 0.0
+        self._rate_limit_backoff = rate_limit_backoff
+
+        # Token-bucket rate limiter (P2-A)
+        self._rate_limiter = _TokenBucket(rate=max_requests_per_second)
         self.http = httpx.AsyncClient(
             base_url=base_url,
             headers={
@@ -50,30 +101,85 @@ class HordeClient:
     async def close(self) -> None:
         await self.http.aclose()
 
+    def check_ip_block(self) -> None:
+        """Raise immediately if the IP is in a local cooldown (TimeoutIP / UnsafeIP)."""
+        now = time.monotonic()
+        if now < self._ip_blocked_until:
+            remaining = int(self._ip_blocked_until - now)
+            if self._ip_block_reason == "UnsafeIP":
+                raise HordeUnsafeIPError(
+                    f"IP flagged as unsafe by Horde (VPN/proxy). Cooldown: {remaining}s remaining."
+                )
+            raise HordeIPTimeoutError(
+                f"IP is in Horde timeout. Cooldown: {remaining}s remaining.",
+                duration_hint=float(remaining),
+            )
+
+    async def _wait_rate_limit(self) -> None:
+        """Sleep until any active 429 cooldown expires."""
+        now = time.monotonic()
+        if now < self._rate_limited_until:
+            await asyncio.sleep(self._rate_limited_until - now)
+
     def _check(self, response: httpx.Response) -> httpx.Response:
         if response.status_code >= 400:
             try:
-                detail = response.json().get("message", response.text)
+                body = response.json()
+                detail = body.get("message", response.text)
+                rc = body.get("rc", "")
             except Exception:
-                detail = response.text
-            raise HordeError(response.status_code, detail)
+                detail, rc = response.text, ""
+
+            if rc == "TimeoutIP":
+                self._ip_blocked_until = time.monotonic() + 3600.0
+                self._ip_block_reason = "TimeoutIP"
+                raise HordeIPTimeoutError(detail)
+            if rc == "UnsafeIP":
+                self._ip_blocked_until = time.monotonic() + 21600.0  # 6h cache TTL
+                self._ip_block_reason = "UnsafeIP"
+                raise HordeUnsafeIPError(detail)
+            if response.status_code == 429:
+                retry_after_str = response.headers.get("Retry-After")
+                try:
+                    retry_after: float | None = float(retry_after_str) if retry_after_str else None
+                except (TypeError, ValueError):
+                    retry_after = None
+                self._rate_limited_until = time.monotonic() + (
+                    retry_after if retry_after is not None else self._rate_limit_backoff
+                )
+
+            raise HordeError(response.status_code, detail, rc=rc)
         return response
 
     async def get_models(self, type: str = "text") -> list[HordeModel]:
         """Fetch available models, using a TTL cache to avoid hammering the API."""
         now = time.monotonic()
         if self._model_cache and now < self._model_cache_expires:
-            return self._model_cache
+            return self._filter_banned(self._model_cache)
         r = self._check(await self.http.get("/v2/status/models", params={"type": type}))
         models = [HordeModel(**m) for m in r.json()]
         self._model_cache = models
         self._model_cache_expires = now + self._model_cache_ttl
-        return models
+        return self._filter_banned(models)
 
     def invalidate_model_cache(self) -> None:
         """Force the next get_models() / get_enriched_models() call to fetch fresh data."""
         self._model_cache_expires = 0.0
         self._enriched_cache_expires = 0.0
+
+    def ban_model(self, name: str, duration: float = 3600.0) -> None:
+        """Ban a model from routing for *duration* seconds and remove it from caches."""
+        self._banned_models[name] = time.monotonic() + duration
+        self._model_cache = [m for m in self._model_cache if m.name != name]
+        self._enriched_cache = [m for m in self._enriched_cache if m.name != name]
+
+    def _filter_banned(self, models: list[HordeModel]) -> list[HordeModel]:
+        """Remove currently-banned models, cleaning up expired bans as a side-effect."""
+        now = time.monotonic()
+        self._banned_models = {n: exp for n, exp in self._banned_models.items() if exp > now}
+        if not self._banned_models:
+            return models
+        return [m for m in models if m.name not in self._banned_models]
 
     async def get_enriched_models(self, type: str = "text") -> list[HordeModel]:
         """Fetch models enriched with real max_context_length/max_length from online workers.
@@ -83,7 +189,7 @@ class HordeClient:
         """
         now = time.monotonic()
         if self._enriched_cache and now < self._enriched_cache_expires:
-            return self._enriched_cache
+            return self._filter_banned(self._enriched_cache)
 
         models, workers = await asyncio.gather(
             self.get_models(type=type),
@@ -117,7 +223,7 @@ class HordeClient:
 
         self._enriched_cache = models
         self._enriched_cache_expires = now + self._model_cache_ttl
-        return models
+        return self._filter_banned(models)
 
     async def get_text_workers(self) -> list[dict]:
         r = self._check(await self.http.get("/v2/workers", params={"type": "text"}))
@@ -128,6 +234,9 @@ class HordeClient:
         return HordeUser(**r.json())
 
     async def submit_text_job(self, payload: HordeTextRequest) -> str:
+        self.check_ip_block()
+        await self._wait_rate_limit()
+        await self._rate_limiter.acquire()
         r = self._check(
             await self.http.post(
                 "/v2/generate/text/async",
@@ -147,6 +256,9 @@ class HordeClient:
             pass
 
     async def submit_image_job(self, payload: HordeImageRequest) -> str:
+        self.check_ip_block()
+        await self._wait_rate_limit()
+        await self._rate_limiter.acquire()
         r = self._check(
             await self.http.post(
                 "/v2/generate/async",

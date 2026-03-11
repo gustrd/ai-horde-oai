@@ -14,8 +14,14 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.horde.client import HordeClient, HordeError
-from app.horde.retry import HordeTimeoutError, with_retry
+from app.horde.client import HordeClient, HordeError, HordeIPTimeoutError, HordeUnsafeIPError
+from app.horde.retry import (
+    HordeCorruptPromptError,
+    HordeImpossibleError,
+    HordeTimeoutError,
+    with_retry,
+)
+from app.config import Settings
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
 from app.horde.translate import chat_to_horde
@@ -88,6 +94,14 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     # Capture request body for logging
     log_messages = [m.model_dump() for m in body.messages]
 
+    # Check for active IP ban before touching the Horde API at all
+    try:
+        horde.check_ip_block()
+    except HordeIPTimeoutError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HordeUnsafeIPError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     # Resolve model alias → real Horde model name
     try:
         models = await horde.get_enriched_models()
@@ -125,6 +139,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                 config.stream_stall_timeout, request, log_messages,
                 tools_fmt=tools_fmt, sem=_sem,
                 max_retries=config.retry.max_retries,
+                model_router=model_router,
+                config=config,
             ),
             media_type="text/event-stream",
         )
@@ -161,6 +177,37 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                     backoff_base=config.retry.backoff_base,
                     on_submit=_on_submit,
                 )
+        except HordeCorruptPromptError as e:
+            err = str(e)
+            request.state.log_extras = {
+                "status": 400,
+                "model": body.model,
+                "real_model": real_model,
+                "messages": log_messages,
+                "error": err,
+            }
+            raise HTTPException(status_code=400, detail={"error": {"type": "invalid_request_error", "message": err}})
+        except (HordeIPTimeoutError, HordeUnsafeIPError) as e:
+            err = str(e)
+            request.state.log_extras = {
+                "status": 503,
+                "model": body.model,
+                "real_model": real_model,
+                "messages": log_messages,
+                "error": err,
+            }
+            raise HTTPException(status_code=503, detail=err)
+        except HordeImpossibleError as e:
+            horde.ban_model(real_model, duration=3600.0)
+            err = f"Model {real_model!r} has no active workers on AI Horde"
+            request.state.log_extras = {
+                "status": "unav.",
+                "model": body.model,
+                "real_model": real_model,
+                "messages": log_messages,
+                "error": err,
+            }
+            raise HTTPException(status_code=503, detail=err)
         except HordeTimeoutError as e:
             request.state.log_extras = {
                 "model": body.model,
@@ -242,6 +289,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         "reasoning_content": reasoning_content or "",
         "reasoning_tokens": estimate_tokens(reasoning_content or ""),
         "tool_info": _tool_info,
+        "job_id": (getattr(request.state, "active_req", None) or {}).get("job_id") or "",
         **({"status": "tool"} if tool_call else {}),
     }
     if tool_call:
@@ -260,6 +308,8 @@ async def _stream_chat(
     tools_fmt: str | None = None,
     sem=None,
     max_retries: int = 2,
+    model_router: ModelRouter | None = None,
+    config: Settings | None = None,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -299,6 +349,21 @@ async def _stream_chat(
         )
         for _attempt in range(1 + _TOOL_FORMAT_MAX_RETRIES):
             _attempt_start = time.monotonic()
+
+            # Delay between retry attempts (P1-B)
+            if _attempt > 0:
+                _retry_delay = (config.retry.streaming_retry_delay if config else 2.0)
+                if _retry_delay > 0:
+                    await asyncio.sleep(_retry_delay)
+
+            # Check for active IP ban before submitting (P0-B)
+            try:
+                horde.check_ip_block()
+            except (HordeIPTimeoutError, HordeUnsafeIPError) as _ip_exc:
+                response_text = f"[IP_BLOCKED: {_ip_exc}]"
+                status_code = 503
+                break
+
             async with _sem:
                 job_id = await horde.submit_text_job(horde_req)
                 if request is not None:
@@ -310,58 +375,120 @@ async def _stream_chat(
                 last_progress = time.monotonic()
                 last_queue_pos: int | None = None
 
+                _poll_404 = False
+                _abort_reason = ""  # "stall", "faulted", or ""
+                _polled_once = False
                 while True:
-                    # Check stall timeout — no progress (queue movement) for too long
-                    if time.monotonic() - last_progress > stall_timeout:
-                        yield "data: [DONE]\n\n"
-                        return
+                    # Check stall timeout — no forward progress for too long.
+                    # Only fires after at least one poll (can't stall before first response).
+                    if _polled_once and time.monotonic() - last_progress > stall_timeout:
+                        await horde.cancel_text_job(job_id)
+                        _abort_reason = "stall"
+                        yield f": x-horde-resubmit reason=stall\n\n"
+                        break
 
-                    status = await horde.poll_text_status(job_id)
+                    try:
+                        status = await horde.poll_text_status(job_id)
+                    except HordeError as _poll_exc:
+                        if _poll_exc.status_code == 404:
+                            # Job ID expired/cancelled on Horde side — treat as empty
+                            # so the outer retry loop can resubmit.
+                            _poll_404 = True
+                            break
+                        raise
+                    _polled_once = True
 
                     if status.done and status.generations:
                         break
 
+                    if not status.is_possible:
+                        await horde.cancel_text_job(job_id)
+                        horde.ban_model(real_model, duration=3600.0)
+                        _abort_reason = "impossible"
+                        yield ": x-horde-abort reason=impossible\n\n"
+                        break
+
                     if status.faulted:
-                        yield "data: [DONE]\n\n"
-                        return
+                        await horde.cancel_text_job(job_id)
+                        _abort_reason = "faulted"
+                        break
 
-                    # Track progress: queue position changing counts as progress
-                    if status.queue_position != last_queue_pos:
+                    # Track forward progress only: position must decrease (or job
+                    # transitions to processing) to reset the stall timer.
+                    # A position going backward (worker dropped/requeued) is NOT progress.
+                    _pos = status.queue_position
+                    if _pos is None:
+                        # Transitioned to processing — always counts as progress
                         last_progress = time.monotonic()
-                        last_queue_pos = status.queue_position
+                    elif last_queue_pos is None or _pos < last_queue_pos:
+                        last_progress = time.monotonic()
+                    last_queue_pos = _pos
 
-                    # Emit SSE comment with queue position
+                    # Emit SSE comment every poll — keeps the client from timing out
                     if status.queue_position is not None:
                         yield f": queue_position={status.queue_position}, eta={status.wait_time}s\n\n"
-                        if request is not None:
-                            _req = getattr(request.state, "active_req", None)
-                            if _req is not None:
-                                _req["queue_pos"] = status.queue_position
-                                _req["eta"] = status.wait_time
-                                refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
-                                if refresh_cb:
-                                    refresh_cb()
+                    elif status.processing:
+                        yield f": processing, eta={status.wait_time}s\n\n"
+                    else:
+                        yield ": polling\n\n"
+                    if status.queue_position is not None and request is not None:
+                        _req = getattr(request.state, "active_req", None)
+                        if _req is not None:
+                            _req["queue_pos"] = status.queue_position
+                            _req["eta"] = status.wait_time
+                            refresh_cb = getattr(request.app.state, "refresh_active_callback", None)
+                            if refresh_cb:
+                                refresh_cb()
 
                     await asyncio.sleep(2)
 
-            gen = status.generations[0]
-            reasoning_content, response_text = _split_thinking(gen.text)
-            worker_name = gen.worker_name or ""
-            worker_id = gen.worker_id or ""
-            kudos = status.kudos or 0.0
-            # Use the actual model Horde assigned (may differ from alias like "best")
-            actual_model = gen.model or real_model
-            _attempt_dur = time.monotonic() - _attempt_start
+            if _abort_reason == "impossible":
+                # Try re-resolving the alias against the now-filtered model list (P1-C)
+                _fallback_model = None
+                if model_router is not None:
+                    try:
+                        _fb_models = await horde.get_enriched_models()
+                        _fallback_model = await model_router.resolve(alias, _fb_models, config=config)
+                    except Exception:
+                        _fallback_model = None
+                if _fallback_model and _fallback_model != real_model and _attempt < _TOOL_FORMAT_MAX_RETRIES:
+                    real_model = _fallback_model
+                    horde_req = horde_req.model_copy(update={"models": [real_model]})
+                    yield f": x-horde-resolved model={real_model}\n\n"
+                    continue  # retry with new model
+                # No fallback available — fail with clear message
+                response_text = f"[MODEL_UNAVAILABLE: {real_model} has no active workers on AI Horde]"
+                status_code = "unav."
+                reasoning_content = None
+                actual_model = real_model
+                _attempt_dur = time.monotonic() - _attempt_start
+                gen = None
+                break
+            if _poll_404 or _abort_reason:
+                # Job gone or aborted — treat as empty so retry fires
+                reasoning_content, response_text = None, ""
+                actual_model = real_model
+                _attempt_dur = time.monotonic() - _attempt_start
+                gen = None
+            else:
+                gen = status.generations[0]
+                reasoning_content, response_text = _split_thinking(gen.text)
+                worker_name = gen.worker_name or ""
+                worker_id = gen.worker_id or ""
+                kudos = status.kudos or 0.0
+                # Use the actual model Horde assigned (may differ from alias like "best")
+                actual_model = gen.model or real_model
+                _attempt_dur = time.monotonic() - _attempt_start
 
             # Retry empty responses
             if not response_text.strip() and not reasoning_content:
-                raw_len = len(gen.text)
+                raw_len = len(gen.text) if gen is not None else 0
                 logger.warning(
                     "empty response (stream, attempt %d/%d) raw_len=%d worker=%s",
                     _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, raw_len, worker_name,
                 )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
-                    if request is not None:
+                    if request is not None and gen is not None:
                         _log_retry(request, alias, real_model, gen, kudos,
                                    log_messages, _stream_input_tokens, _attempt_dur, "empty response",
                                    tool_info=f"raw_len={raw_len} worker={worker_name}",
@@ -387,7 +514,7 @@ async def _stream_chat(
                         _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, tools_fmt, _snippet,
                     )
                     if _attempt < _TOOL_FORMAT_MAX_RETRIES:
-                        if request is not None:
+                        if request is not None and gen is not None:
                             _log_retry(request, alias, real_model, gen, kudos,
                                        log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format",
                                        tool_info=_tool_info, response_text=response_text)
@@ -512,6 +639,7 @@ async def _stream_chat(
                     reasoning_content=reasoning_content or "",
                     reasoning_tokens=estimate_tokens(reasoning_content or ""),
                     tool_info=_tool_info,
+                    job_id=job_id or "",
                 )
                 request_log = getattr(request.app.state, "request_log", None)
                 if request_log is not None:
@@ -523,6 +651,30 @@ async def _stream_chat(
                 pass
 
 
+_EOS_TOKENS = (
+    "<|im_end|>",
+    "<|eot_id|>",
+    "<|end_of_text|>",
+    "</s>",
+    "<|endoftext|>",
+)
+
+
+def _strip_eos(text: str) -> str:
+    """Strip trailing EOS/stop tokens that some Horde workers leak into output."""
+    t = text
+    changed = True
+    while changed:
+        changed = False
+        stripped = t.rstrip()
+        for tok in _EOS_TOKENS:
+            if stripped.endswith(tok):
+                t = stripped[: -len(tok)]
+                changed = True
+                break
+    return t
+
+
 def _split_thinking(text: str) -> tuple[str | None, str]:
     """Split <think>...</think> reasoning from the actual response.
 
@@ -531,6 +683,7 @@ def _split_thinking(text: str) -> tuple[str | None, str]:
     If truncated mid-think (no closing tag), reasoning is None and the
     original text is returned as-is.
     """
+    text = _strip_eos(text)
     if "<think>" not in text:
         return None, text
     start = text.find("<think>")
@@ -539,7 +692,7 @@ def _split_thinking(text: str) -> tuple[str | None, str]:
         # Truncated mid-think — can't cleanly split
         return None, text
     reasoning = text[start + len("<think>"):end]
-    response = text[end + len("</think>"):].lstrip("\n")
+    response = _strip_eos(text[end + len("</think>"):].lstrip("\n"))
     return reasoning, response
 
 

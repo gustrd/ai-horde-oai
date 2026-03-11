@@ -12,7 +12,17 @@
       "WebFetch(domain:aihorde.net)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:dbzer0.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cat >> \"C:\\\\Users\\\\gustr\\\\_git\\\\ai-horde-oai\\\\tests\\\\test_chat.py\" << 'EOF'\n\n\n# ── Unit tests for _strip_eos and _split_thinking ────────────────────────────\n\ndef test_strip_eos_chatml\\(\\):\n    assert _strip_eos\\(\"Hello!<|im_end|>\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_llama3_eot\\(\\):\n    assert _strip_eos\\(\"Hello!<|eot_id|>\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_llama3_end_of_text\\(\\):\n    assert _strip_eos\\(\"Hello!<|end_of_text|>\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_slash_s\\(\\):\n    assert _strip_eos\\(\"Hello!</s>\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_multiple_trailing\\(\\):\n    # Worker may emit token + whitespace + token\n    assert _strip_eos\\(\"Hello!<|im_end|>  <|im_end|>\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_no_eos\\(\\):\n    assert _strip_eos\\(\"Hello!\"\\) == \"Hello!\"\n\n\ndef test_strip_eos_empty\\(\\):\n    assert _strip_eos\\(\"\"\\) == \"\"\n\n\ndef test_split_thinking_strips_eos_plain\\(\\):\n    rc, text = _split_thinking\\(\"Hello!<|im_end|>\"\\)\n    assert rc is None\n    assert text == \"Hello!\"\n\n\ndef test_split_thinking_strips_eos_after_think\\(\\):\n    rc, text = _split_thinking\\(\"<think>reason</think>\\\\nAnswer<|im_end|>\"\\)\n    assert rc == \"reason\"\n    assert text == \"Answer\"\nEOF)",
+      "Bash(for f:*)",
+      "Bash(find /c/Users/gustr/_git/ai-horde-oai/app -type f \\\\\\( -name \"*.py\" -o -name \"*.yaml\" -o -name \"*.yml\" \\\\\\) 2>/dev/null | sort)",
+      "Bash(grep -r \"BadClientAgent\\\\|blocked.*agent\\\\|agent.*blocked\\\\|agent.*ban\\\\|client.*ban\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde --include=\"*.py\" 2>/dev/null | head -20)",
+      "Bash(grep -r \"client_agent\\\\|bridge_agent\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" -B 3 -A 3 2>/dev/null | head -60)",
+      "Bash(grep -r \"check.*client.*agent\\\\|validate.*client.*agent\\\\|block.*client\\\\|client.*block\\\\|forbidden.*client\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde --include=\"*.py\" -i 2>/dev/null | head -30)",
+      "Bash(grep -r \"unknown client\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde --include=\"*.py\" -B 5 -A 5 2>/dev/null | head -80)",
+      "Bash(grep -rn \"Client-Agent.*in\\\\|args\\\\[.*Client-Agent.*\\\\]\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" 2>/dev/null | grep -v \"self.args\\\\|client_agent\" | head -20)",
+      "Bash(find /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde -type f \\\\\\( -name \"*list*\" -o -name \"*block*\" -o -name \"*ban*\" \\\\\\) 2>/dev/null | head -20)",
+      "Bash(grep -rn \"args\\\\[.Client-Agent.\\\\].*in\\\\|\\\\.startswith\\\\|\\\\.endswith\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" 2>/dev/null | grep -i \"client\\\\|agent\")"
     ]
   }
 }

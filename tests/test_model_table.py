@@ -13,7 +13,6 @@ from app.tui.widgets.model_table import ModelTable
 from textual.widgets import DataTable, Input, Label
 
 
-pytestmark = pytest.mark.asyncio
 
 
 def make_config(**overrides) -> Settings:

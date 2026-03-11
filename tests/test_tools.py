@@ -14,7 +14,6 @@ from app.schemas.openai import ChatMessage, Tool, ToolCall, ToolCallFunction, To
 from tests.conftest import MODELS_FIXTURE
 
 
-pytestmark = pytest.mark.asyncio
 
 WEATHER_TOOL = {
     "type": "function",

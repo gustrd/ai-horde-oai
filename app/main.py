@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI):
         api_key=config.horde_api_key,
         client_agent=config.client_agent,
         model_cache_ttl=config.model_cache_ttl,
+        rate_limit_backoff=config.retry.rate_limit_backoff,
+        max_requests_per_second=config.max_requests_per_second,
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)
@@ -133,6 +135,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         reasoning_content=extras.get("reasoning_content", ""),
                         reasoning_tokens=extras.get("reasoning_tokens", 0),
                         tool_info=extras.get("tool_info", ""),
+                        job_id=extras.get("job_id", ""),
                     )
                     request_log = getattr(request.app.state, "request_log", None)
                     if request_log is not None:

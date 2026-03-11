@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from app.config import Settings, load_config, save_config
+import pytest
+from pydantic import ValidationError
+
+from app.config import RetrySettings, Settings, load_config, save_config
 
 
 def test_default_settings():
@@ -15,6 +18,73 @@ def test_default_settings():
     assert s.port == 8000
     assert s.retry.max_retries == 2
     assert s.retry.timeout_seconds == 300
+    assert s.retry.rate_limit_backoff == 5.0
+    assert s.retry.streaming_retry_delay == 2.0
+    assert s.max_requests_per_second == 1.0
+
+
+# ── Client agent validation (P3) ─────────────────────────────────────────────
+
+def test_client_agent_default_is_valid():
+    """Default client_agent passes validation."""
+    s = Settings()
+    assert s.client_agent == "ai-horde-oai:0.1:github"
+
+
+def test_client_agent_valid_custom():
+    """Well-formed client_agent is accepted."""
+    s = Settings(client_agent="my-app:1.2.3:https://example.com")
+    assert s.client_agent == "my-app:1.2.3:https://example.com"
+
+
+def test_client_agent_banned_placeholder_rejected():
+    """The hardcoded Horde banned placeholder raises ValidationError."""
+    with pytest.raises(ValidationError, match="banned Horde placeholder"):
+        Settings(client_agent="My-Project:v0.0.1:My-Contact")
+
+
+def test_client_agent_bad_format_rejected():
+    """client_agent without exactly 3 colon-separated parts raises ValidationError."""
+    with pytest.raises(ValidationError):
+        Settings(client_agent="no-colons")
+
+
+def test_client_agent_empty_part_rejected():
+    """client_agent with an empty part raises ValidationError."""
+    with pytest.raises(ValidationError):
+        Settings(client_agent="name::contact")
+
+
+# ── RetrySettings new fields ──────────────────────────────────────────────────
+
+def test_retry_settings_new_fields():
+    """New RetrySettings fields have correct defaults."""
+    r = RetrySettings()
+    assert r.rate_limit_backoff == 5.0
+    assert r.streaming_retry_delay == 2.0
+
+
+def test_retry_settings_custom_values():
+    """New RetrySettings fields can be overridden."""
+    r = RetrySettings(rate_limit_backoff=10.0, streaming_retry_delay=0.5)
+    assert r.rate_limit_backoff == 10.0
+    assert r.streaming_retry_delay == 0.5
+
+
+# ── HordeUser suspicion field (P2-B) ─────────────────────────────────────────
+
+def test_horde_user_suspicion_default():
+    """HordeUser has suspicion=0 by default."""
+    from app.schemas.horde import HordeUser
+    u = HordeUser(username="test#1", kudos=100.0)
+    assert u.suspicion == 0
+
+
+def test_horde_user_suspicion_parses():
+    """HordeUser parses suspicion from API response."""
+    from app.schemas.horde import HordeUser
+    u = HordeUser(username="test#1", kudos=100.0, suspicion=4)
+    assert u.suspicion == 4
 
 
 def test_load_config_from_yaml(tmp_path):

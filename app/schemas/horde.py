@@ -22,6 +22,7 @@ class HordeUser(BaseModel):
     kudos: float = 0
     trusted: bool = False
     id: int = 0
+    suspicion: int = 0  # accumulates from corrupt prompts / profane names; threshold = 5
 
 
 class HordeTextParams(BaseModel):

@@ -67,6 +67,7 @@ class LogDetailModal(ModalScreen):
             f"  Real model: {e.real_model or e.model or '—'}",
             f"  Worker:     {e.worker or '—'}",
             f"  Worker ID:  {e.worker_id or '—'}",
+            f"  Job ID:     {e.job_id or '—'}",
             f"  Kudos:      {e.kudos:.2f}",
             f"  Tokens in:  {e.input_tokens:,}  (~estimated)",
             f"  Tokens out: {e.output_tokens:,}  (~estimated)",

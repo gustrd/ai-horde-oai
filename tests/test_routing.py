@@ -144,3 +144,67 @@ async def test_best_empty_model_list_raises():
     router = ModelRouter(config)
     with pytest.raises(ModelNotFoundError):
         await router.resolve("best", [])
+
+
+@pytest.mark.asyncio
+async def test_fast_skips_no_worker_models():
+    """fast should never pick a model with count=0 (would get is_possible=false)."""
+    config = Settings(default_model="")
+    router = ModelRouter(config)
+    models = [
+        make_model("dead/model", count=0, queued=0, eta=0),
+        make_model("alive/model", count=2, queued=5, eta=20),
+    ]
+    result = await router.resolve("fast", models)
+    assert result == "alive/model"
+
+
+@pytest.mark.asyncio
+async def test_best_skips_no_worker_models():
+    """best should never pick a model with count=0."""
+    config = Settings(default_model="")
+    router = ModelRouter(config)
+    models = [
+        make_model("dead/model", count=0, queued=0, eta=0),
+        make_model("alive/model", count=3, queued=5, eta=20),
+    ]
+    result = await router.resolve("best", models)
+    assert result == "alive/model"
+
+
+@pytest.mark.asyncio
+async def test_fast_all_zero_eta_picks_highest_tps():
+    """When all models have ETA=0, fast picks the one with highest T/s."""
+    config = Settings(default_model="")
+    router = ModelRouter(config)
+    models = [
+        HordeModel(name="slow/model", count=2, queued=0, eta=0, performance="5.0 tokens per second"),
+        HordeModel(name="fast/model", count=2, queued=0, eta=0, performance="25.0 tokens per second"),
+    ]
+    result = await router.resolve("fast", models)
+    assert result == "fast/model"
+
+
+@pytest.mark.asyncio
+async def test_fast_prefers_non_zero_eta_over_zero():
+    """fast should prefer models with real ETA over ETA=0 (no-worker) models."""
+    config = Settings(default_model="")
+    router = ModelRouter(config)
+    models = [
+        make_model("zero-eta/model", count=2, queued=0, eta=0),
+        make_model("real-eta/model", count=2, queued=3, eta=15),
+    ]
+    result = await router.resolve("fast", models)
+    assert result == "real-eta/model"
+
+
+@pytest.mark.asyncio
+async def test_fast_and_best_raise_when_all_count_zero():
+    """If all models have count=0 (no workers), both aliases raise."""
+    config = Settings(default_model="")
+    router = ModelRouter(config)
+    models = [make_model("dead/a", count=0), make_model("dead/b", count=0)]
+    with pytest.raises(ModelNotFoundError):
+        await router.resolve("fast", models)
+    with pytest.raises(ModelNotFoundError):
+        await router.resolve("best", models)

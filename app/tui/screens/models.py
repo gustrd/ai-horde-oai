@@ -47,7 +47,7 @@ class ModelsScreen(Screen):
         self.run_worker(self._load_models(), exclusive=True)
 
     def on_screen_resume(self) -> None:
-        """Re-apply config filters whenever the screen comes back into focus."""
+        """Re-apply config filters and refresh model data when screen comes back into focus."""
         cfg = self.app.config
         try:
             widget = self.query_one(ModelTable)
@@ -62,6 +62,8 @@ class ModelsScreen(Screen):
             self.query_one("#info", Label).update(f"{shown} of {total} models")
         except Exception:
             pass
+        # Reload model data if cache may be stale (piggybacks on cache TTL)
+        self.run_worker(self._load_models(), exclusive=True)
 
     def on_input_changed(self, event) -> None:
         """Update info label when the filter input changes."""
@@ -194,4 +196,5 @@ class ModelsScreen(Screen):
 
     def action_refresh(self) -> None:
         self.query_one("#info", Label).update("Refreshing...")
+        self.app.horde.invalidate_model_cache()
         self.run_worker(self._load_models(), exclusive=True)

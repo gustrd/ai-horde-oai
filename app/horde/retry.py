@@ -5,6 +5,8 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
+from app.horde.client import HordeError
+
 
 @runtime_checkable
 class HordeStatusLike(Protocol):
@@ -22,6 +24,19 @@ class HordeTimeoutError(Exception):
 
 
 class HordeJobFailed(Exception):
+    pass
+
+
+class HordeImpossibleError(Exception):
+    """Raised when Horde reports is_possible=False (no workers for the model)."""
+    pass
+
+
+class HordeCorruptPromptError(Exception):
+    """Raised when Horde rejects a prompt as corrupt (rc=CorruptPrompt).
+
+    Must never be retried — each attempt adds suspicion to both the IP and account.
+    """
     pass
 
 
@@ -85,6 +100,10 @@ async def with_retry(
                 if on_status:
                     on_status(status)
 
+                if getattr(status, "is_possible", True) is False:
+                    await cancel_fn(job_id)
+                    raise HordeImpossibleError(f"Job {job_id}: model has no active workers (is_possible=false)")
+
                 if status.faulted:
                     raise HordeJobFailed(f"Job {job_id} faulted")
 
@@ -101,10 +120,24 @@ async def with_retry(
                 await cancel_fn(job_id)
             last_exc = HordeTimeoutError(f"Attempt {attempt + 1} timed out after {timeout_seconds}s")
 
+        except HordeImpossibleError:
+            raise  # propagate immediately — no point retrying with same model
+
         except HordeJobFailed as exc:
             if job_id:
                 await cancel_fn(job_id)
             last_exc = exc
+
+        except HordeError as exc:
+            # CorruptPrompt must never be retried — each attempt adds suspicion.
+            if exc.rc == "CorruptPrompt":
+                raise HordeCorruptPromptError(exc.message) from exc
+            # 404 means the job ID is no longer known to Horde (expired/cancelled).
+            # Treat it as a job failure so with_retry can move on to the next attempt.
+            if exc.status_code == 404:
+                last_exc = HordeJobFailed(f"Job {job_id} not found (404): {exc.message}")
+            else:
+                raise
 
         except asyncio.CancelledError:
             if job_id:

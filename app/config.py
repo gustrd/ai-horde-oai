@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 CONFIG_DIR = Path.home() / ".ai-horde-oai"
@@ -17,6 +17,8 @@ class RetrySettings(BaseModel):
     timeout_seconds: int = 300
     broaden_on_retry: bool = True
     backoff_base: float = 2.0  # seconds; doubled each retry attempt
+    rate_limit_backoff: float = 5.0   # seconds to freeze submissions after a 429
+    streaming_retry_delay: float = 2.0  # seconds between streaming retry attempts
 
 
 class ImageDefaults(BaseModel):
@@ -33,9 +35,25 @@ class Settings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     client_agent: str = "ai-horde-oai:0.1:github"
+
+    @field_validator("client_agent")
+    @classmethod
+    def _validate_client_agent(cls, v: str) -> str:
+        _BANNED_PLACEHOLDER = "My-Project:v0.0.1:My-Contact"
+        if v == _BANNED_PLACEHOLDER:
+            raise ValueError(
+                "client_agent is the banned Horde placeholder. "
+                "Set it to '<name>:<version>:<contact_url>'."
+            )
+        parts = v.split(":", 2)  # maxsplit=2 so URLs with :// are kept in the third part
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                f"client_agent must have format '<name>:<version>:<contact_url>', got {v!r}"
+            )
+        return v
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     default_max_tokens: int = 2048  # fallback when client doesn't specify max_tokens
-    model_cache_ttl: int = 60       # seconds to cache /v2/status/models response
+    model_cache_ttl: int = 30       # seconds to cache /v2/status/models response
     stream_stall_timeout: int = 120  # seconds without progress before aborting SSE
     max_concurrent_requests: int = 3  # max simultaneous Horde jobs; 0 = unlimited
 
@@ -53,6 +71,8 @@ class Settings(BaseModel):
     trusted_workers: bool = False
     worker_whitelist: list[str] = Field(default_factory=list)
     worker_blocklist: list[str] = Field(default_factory=list)
+
+    max_requests_per_second: float = 1.0  # token-bucket rate for generate endpoints; 0 = unlimited
 
     retry: RetrySettings = Field(default_factory=RetrySettings)
     image_defaults: ImageDefaults = Field(default_factory=ImageDefaults)

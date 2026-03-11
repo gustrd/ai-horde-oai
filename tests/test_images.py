@@ -9,7 +9,6 @@ from app.config import RetrySettings
 from tests.conftest import IMAGE_FIXTURE
 
 
-pytestmark = pytest.mark.asyncio
 
 
 def _fast_retry(max_retries=0, timeout_seconds=1):

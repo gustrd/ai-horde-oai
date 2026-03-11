@@ -243,6 +243,14 @@ class ChatScreen(Screen):
                                 )
                             else:
                                 self.query_one("#status", Label).update(f"Queued — {line[2:]}")
+                        elif line.startswith(": processing"):
+                            elapsed_s = time.monotonic() - start
+                            m = re.search(r"eta=(\d+)", line)
+                            eta_str = f", eta={m.group(1)}s" if m and int(m.group(1)) > 0 else ""
+                            model_label = f"{actual_model} — " if actual_model != str(model) else ""
+                            self.query_one("#status", Label).update(
+                                f"Processing — {model_label}elapsed={elapsed_s:.0f}s{eta_str}"
+                            )
                         elif line.startswith("data: ") and line != "data: [DONE]":
                             chunk = line[6:]
                             try:

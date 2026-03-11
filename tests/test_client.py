@@ -121,3 +121,41 @@ async def test_get_user(horde_client, respx_mock):
     user = await horde_client.get_user()
     assert user.kudos == USER_FIXTURE["kudos"]
     assert user.username == USER_FIXTURE["username"]
+
+
+def test_ban_model_removes_from_cache(horde_client):
+    """ban_model() removes the model from both in-memory caches."""
+    from app.schemas.horde import HordeModel
+    m1 = HordeModel(name="dead/model", count=0)
+    m2 = HordeModel(name="alive/model", count=2)
+    horde_client._model_cache = [m1, m2]
+    horde_client._enriched_cache = [m1, m2]
+
+    horde_client.ban_model("dead/model", duration=3600)
+
+    assert all(m.name != "dead/model" for m in horde_client._model_cache)
+    assert all(m.name != "dead/model" for m in horde_client._enriched_cache)
+    assert "dead/model" in horde_client._banned_models
+
+
+def test_ban_model_filtered_from_get_models_cache(horde_client):
+    """_filter_banned() excludes banned models from returned list."""
+    from app.schemas.horde import HordeModel
+    m1 = HordeModel(name="dead/model", count=0)
+    m2 = HordeModel(name="alive/model", count=2)
+    horde_client._banned_models["dead/model"] = time.monotonic() + 3600
+
+    result = horde_client._filter_banned([m1, m2])
+    assert len(result) == 1
+    assert result[0].name == "alive/model"
+
+
+def test_ban_model_expires(horde_client):
+    """Expired bans are cleaned up and model reappears."""
+    from app.schemas.horde import HordeModel
+    m = HordeModel(name="model/x", count=1)
+    horde_client._banned_models["model/x"] = time.monotonic() - 1  # already expired
+
+    result = horde_client._filter_banned([m])
+    assert len(result) == 1
+    assert "model/x" not in horde_client._banned_models

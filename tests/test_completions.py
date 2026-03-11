@@ -9,7 +9,6 @@ from app.config import RetrySettings
 from tests.conftest import GENERATE_FIXTURE
 
 
-pytestmark = pytest.mark.asyncio
 
 
 def _fast_retry():
