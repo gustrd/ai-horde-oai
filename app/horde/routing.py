@@ -32,24 +32,13 @@ class ModelRouter:
         return max(candidates, key=lambda m: m.count).name
 
     def _pick_fast(self, models: list[HordeModel], config: Settings) -> str:
-        """Pick model with lowest non-zero ETA; if all ETA=0, pick highest T/s."""
-        import re
-
-        # Exclude models with no workers — they will immediately get is_possible=false
+        """Pick model with lowest ETA."""
+        # Exclude models with no workers
         candidates = [m for m in self._apply_filters(models, config) if m.count > 0]
         if not candidates:
             raise ModelNotFoundError("No text models available from Horde after applying filters")
 
-        non_zero_eta = [m for m in candidates if m.eta > 0]
-        if non_zero_eta:
-            return min(non_zero_eta, key=lambda m: (m.eta, m.queued)).name
-
-        # All ETA=0 — fall back to highest tokens/sec
-        def _tps(m: HordeModel) -> float:
-            match = re.search(r"([\d.]+)", str(m.performance or ""))
-            return float(match.group(1)) if match else 0.0
-
-        return max(candidates, key=_tps).name
+        return min(candidates, key=lambda m: (m.eta, m.queued)).name
 
     async def resolve(self, alias: str, models: list[HordeModel], config: Settings | None = None) -> str:
         """Resolve a dummy alias to a real Horde model name.

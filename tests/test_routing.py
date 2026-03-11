@@ -173,21 +173,8 @@ async def test_best_skips_no_worker_models():
 
 
 @pytest.mark.asyncio
-async def test_fast_all_zero_eta_picks_highest_tps():
-    """When all models have ETA=0, fast picks the one with highest T/s."""
-    config = Settings(default_model="")
-    router = ModelRouter(config)
-    models = [
-        HordeModel(name="slow/model", count=2, queued=0, eta=0, performance="5.0 tokens per second"),
-        HordeModel(name="fast/model", count=2, queued=0, eta=0, performance="25.0 tokens per second"),
-    ]
-    result = await router.resolve("fast", models)
-    assert result == "fast/model"
-
-
-@pytest.mark.asyncio
-async def test_fast_prefers_non_zero_eta_over_zero():
-    """fast should prefer models with real ETA over ETA=0 (no-worker) models."""
+async def test_fast_prefers_zero_eta_over_non_zero():
+    """fast should prefer models with ETA=0 (considered fastest)."""
     config = Settings(default_model="")
     router = ModelRouter(config)
     models = [
@@ -195,7 +182,7 @@ async def test_fast_prefers_non_zero_eta_over_zero():
         make_model("real-eta/model", count=2, queued=3, eta=15),
     ]
     result = await router.resolve("fast", models)
-    assert result == "real-eta/model"
+    assert result == "zero-eta/model"
 
 
 @pytest.mark.asyncio
