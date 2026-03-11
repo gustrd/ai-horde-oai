@@ -40,6 +40,7 @@ class RequestLogEntry:
     reasoning_content: str = ""    # chain-of-thought from reasoning models
     reasoning_tokens: int = 0      # estimated token count of reasoning block
     checked: bool = False          # user-toggled read/checked flag
+    tool_info: str = ""            # tool call detection result / retry reason
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,7 @@ def entry_to_dict(entry: RequestLogEntry) -> dict:
         "reasoning_content": entry.reasoning_content,
         "reasoning_tokens": entry.reasoning_tokens,
         "checked": entry.checked,
+        "tool_info": entry.tool_info,
     }
     return d
 
@@ -108,6 +110,7 @@ def entry_from_dict(d: dict) -> RequestLogEntry:
         reasoning_content=d.get("reasoning_content", ""),
         reasoning_tokens=int(d.get("reasoning_tokens", 0)),
         checked=bool(d.get("checked", False)),
+        tool_info=d.get("tool_info", ""),
     )
 
 

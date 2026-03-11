@@ -74,6 +74,13 @@ class LogDetailModal(ModalScreen):
         if e.reasoning_tokens:
             lines.append(f"  Tokens (reasoning): {e.reasoning_tokens:,}  (~estimated)")
 
+        if e.tool_info:
+            lines += [
+                "",
+                "── Tool Call ───────────────────────────────",
+                f"  {e.tool_info}",
+            ]
+
         if e.error:
             lines += [
                 "",

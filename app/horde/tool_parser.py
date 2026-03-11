@@ -35,13 +35,18 @@ def parse_tool_call(text: str, fmt: str) -> ToolCall | None:
 def _parse_openclaw_channel(text: str) -> ToolCall | None:
     """Parse <|start|>assistant<|channel|>tool {...}<|im_end|> format."""
     match = re.search(
-        r"<\|start\|>assistant<\|channel\|>tool\s*(.*?)(?:<\|im_end\|>|\Z)",
+        r"<\|start\|>assistant<\|[^|]*\|>tool\s*(.*?)(?:<\|im_end\|>|\Z)",
         text,
         re.DOTALL,
     )
     if match:
         try:
-            data = json.loads(match.group(1).strip())
+            raw = match.group(1).strip()
+            # Strip optional "to=<name>" routing prefix (e.g. "to=read{..." → "{...")
+            brace = raw.find("{")
+            if brace > 0:
+                raw = raw[brace:]
+            data = json.loads(raw)
             result = _make_tool_call(data)
             if result is not None:
                 logger.debug("tool call: parsed OpenClaw channel format")

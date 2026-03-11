@@ -10,7 +10,7 @@ from app.horde.templates import format_tool_result, format_tools_for_model, mess
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
 from app.horde.translate import chat_to_horde
 from app.main import create_app
-from app.schemas.openai import ChatMessage, Tool, ToolFunction
+from app.schemas.openai import ChatMessage, Tool, ToolCall, ToolCallFunction, ToolFunction
 from tests.conftest import MODELS_FIXTURE
 
 
@@ -48,6 +48,8 @@ TOOL_CALL_OPENCLAW_MULTILINE = '''\
 <|im_end|>'''
 TOOL_CALL_OPENCLAW_NO_CLOSE = '<|start|>assistant<|channel|>tool {"name": "get_weather", "arguments": {"city": "Tokyo"}}'
 TOOL_CALL_OPENCLAW_WITH_PREAMBLE = 'Reading HEARTBEAT.md.<|channel|>commentary<|message|>Reading HEARTBEAT.md.<|end|><|start|>assistant<|channel|>tool {"name": "read", "arguments": {"path": "/tmp/foo.md"}} <|im_end|>'
+TOOL_CALL_OPENCLAW_TO_PREFIX = '<|channel|>analysis<|message|>Let\'s read memory/2026-03-10.md.<|end|><|start|>assistant<|channel|>tool to=read{\n "name": "read",\n "arguments": {"path": "/root/.openclaw/workspace/memory/2026-03-10.md"}\n }'
+TOOL_CALL_OPENCLAW_SPACE_IN_TOKEN = '<|end|><|start|>assistant<|chann el|>tool to=process{\n "name": "process",\n "arguments": {"action": "list"}\n }<|im_end|>'
 
 TOOL_CALL_JSON_COMPACT = '{"name": "get_weather", "arguments": {"city": "Paris"}}'
 TOOL_CALL_JSON_PRETTY = '''{
@@ -133,6 +135,40 @@ def test_tool_role_in_render_messages():
     prompt = messages_to_prompt(messages, "aphrodite/hermes", tools=[WEATHER_TOOL])
     assert "Sunny, 22C" in prompt
     assert "<tool_response>" in prompt
+
+
+def _make_assistant_tool_call_msg(name: str, arguments: dict) -> ChatMessage:
+    tc = ToolCall(function=ToolCallFunction(name=name, arguments=json.dumps(arguments)))
+    return ChatMessage(role="assistant", content=None, tool_calls=[tc])
+
+
+def test_assistant_tool_call_renders_nonempty_hermes():
+    """Assistant message with tool_calls renders <tool_call> JSON, not empty string."""
+    messages = [
+        ChatMessage(role="user", content="What's the weather?"),
+        _make_assistant_tool_call_msg("get_weather", {"city": "Paris"}),
+        ChatMessage(role="tool", content='{"temp": "22C"}', tool_call_id="call_1"),
+    ]
+    prompt = messages_to_prompt(messages, "aphrodite/nous-hermes-2", tools=[WEATHER_TOOL])
+    assert "<tool_call>" in prompt
+    assert "get_weather" in prompt
+    assert "Paris" in prompt
+    # Must not contain an empty assistant block
+    assert "<|im_start|>assistant\n<|im_end|>" not in prompt
+
+
+def test_assistant_tool_call_renders_nonempty_llama3():
+    """Assistant message with tool_calls renders raw JSON for llama3, not empty string."""
+    messages = [
+        ChatMessage(role="user", content="What's the weather?"),
+        _make_assistant_tool_call_msg("get_weather", {"city": "London"}),
+        ChatMessage(role="tool", content='{"temp": "18C"}', tool_call_id="call_2"),
+    ]
+    prompt = messages_to_prompt(messages, "aphrodite/llama-3.1-8b-instruct", tools=[WEATHER_TOOL])
+    assert "get_weather" in prompt
+    assert "London" in prompt
+    # llama3 assistant block must not be empty
+    assert "<|end_header_id|>\n\n<|eot_id|>" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +263,22 @@ def test_parse_tool_call_openclaw_llama3_format():
     tc = parse_tool_call(TOOL_CALL_OPENCLAW, "llama3")
     assert tc is not None
     assert tc.function.name == "get_weather"
+
+
+def test_parse_tool_call_openclaw_to_prefix():
+    """Parses OpenClaw format with 'to=<name>' token between 'tool' and JSON."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW_TO_PREFIX, "hermes")
+    assert tc is not None
+    assert tc.function.name == "read"
+    assert json.loads(tc.function.arguments)["path"] == "/root/.openclaw/workspace/memory/2026-03-10.md"
+
+
+def test_parse_tool_call_openclaw_space_in_channel_token():
+    """Parses OpenClaw format when model emits '<|chann el|>' with a space in the token."""
+    tc = parse_tool_call(TOOL_CALL_OPENCLAW_SPACE_IN_TOKEN, "hermes")
+    assert tc is not None
+    assert tc.function.name == "process"
+    assert json.loads(tc.function.arguments)["action"] == "list"
 
 
 def test_parse_tool_call_hermes_plain_json_compact():

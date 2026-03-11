@@ -117,7 +117,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         timestamp=datetime.now(),
                         method=request.method,
                         path=request.url.path,
-                        status=response.status_code,
+                        status=extras.get("status", response.status_code),
                         duration=duration,
                         model=extras.get("model", ""),
                         real_model=extras.get("real_model", ""),
@@ -132,6 +132,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         output_tokens=extras.get("output_tokens", 0),
                         reasoning_content=extras.get("reasoning_content", ""),
                         reasoning_tokens=extras.get("reasoning_tokens", 0),
+                        tool_info=extras.get("tool_info", ""),
                     )
                     request_log = getattr(request.app.state, "request_log", None)
                     if request_log is not None:

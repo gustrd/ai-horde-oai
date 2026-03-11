@@ -46,6 +46,8 @@ def _log_retry(
     input_tokens: int,
     duration: float,
     reason: str,
+    tool_info: str = "",
+    response_text: str = "",
 ) -> None:
     """Emit a retry log entry (status='retry') to request_log and log_callback."""
     try:
@@ -64,6 +66,8 @@ def _log_retry(
             error=reason,
             input_tokens=input_tokens,
             output_tokens=0,
+            tool_info=tool_info,
+            response_text=response_text,
         )
         request_log = getattr(request.app.state, "request_log", None)
         if request_log is not None:
@@ -131,6 +135,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     response_text = ""
     reasoning_content: str | None = None
     tool_call: ToolCall | None = None
+    _tool_info = ""
     _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
 
     input_tokens = sum(
@@ -179,29 +184,49 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # Retry empty responses
         if not response_text.strip() and not reasoning_content:
-            logger.warning("empty response (attempt %d/%d)", _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES)
+            raw_len = len(gen.text if gen else "")
+            _worker = gen.worker_name or "" if gen else ""
+            logger.warning(
+                "empty response (attempt %d/%d) raw_len=%d worker=%s",
+                _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, raw_len, _worker,
+            )
             if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                 _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
-                           log_messages, input_tokens, _attempt_dur, "empty response")
+                           log_messages, input_tokens, _attempt_dur, "empty response",
+                           tool_info=f"raw_len={raw_len} worker={_worker}",
+                           response_text=gen.text if gen else "")
                 continue
-            response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {len(gen.text if gen else '')} chars]"
+            response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {raw_len} chars]"
 
         # Tool call detection (non-streaming)
         tool_call = None
+        _tool_info = ""
         if body.tools and body.tool_choice != "none":
             fmt = detect_tool_format(real_model)
+            _snippet = response_text[:200].replace("\n", " ")
+            logger.debug(
+                "tool detection: attempt %d/%d fmt=%s response=%r",
+                _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, fmt, _snippet,
+            )
             tool_call = parse_tool_call(response_text, fmt)
-            if tool_call is None and response_text.lstrip().startswith("<tool_call>"):
+            if tool_call is not None:
+                _tool_info = f"detected: {tool_call.function.name} (fmt={fmt})"
+                logger.info("tool call detected: name=%s fmt=%s", tool_call.function.name, fmt)
+            elif response_text.lstrip().startswith("<tool_call>"):
+                _tool_info = f"retry: invalid format (attempt {_attempt + 1}/{1 + _TOOL_FORMAT_MAX_RETRIES}, fmt={fmt})"
                 logger.warning(
-                    "tool call with invalid formatting (attempt %d/%d)",
-                    _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
+                    "tool call with invalid formatting (attempt %d/%d) fmt=%s response=%r",
+                    _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, fmt, _snippet,
                 )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                     _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
-                               log_messages, input_tokens, _attempt_dur, "tool call invalid format")
+                               log_messages, input_tokens, _attempt_dur, "tool call invalid format",
+                               tool_info=_tool_info, response_text=response_text)
                     continue
-                _snippet = response_text[:200].replace("\n", " ")
                 response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
+            else:
+                _tool_info = f"not detected: plain text response (fmt={fmt})"
+                logger.info("tool call not detected: treating as text fmt=%s response=%r", fmt, _snippet)
         break
 
     request.state.log_extras = {
@@ -216,6 +241,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         "output_tokens": estimate_tokens(response_text),
         "reasoning_content": reasoning_content or "",
         "reasoning_tokens": estimate_tokens(reasoning_content or ""),
+        "tool_info": _tool_info,
+        **({"status": "tool"} if tool_call else {}),
     }
     if tool_call:
         return _build_tool_response(status, body.model, real_model, tool_call)
@@ -254,8 +281,9 @@ async def _stream_chat(
     kudos = 0.0
     response_text = ""
     reasoning_content: str | None = None
-    status_code = 200
+    status_code: int | str = 200
     error_msg = ""
+    _tool_info = ""
 
     _TOOL_FORMAT_MAX_RETRIES = max_retries
     _sem = sem or nullcontext()
@@ -327,34 +355,53 @@ async def _stream_chat(
 
             # Retry empty responses
             if not response_text.strip() and not reasoning_content:
-                logger.warning("empty response (attempt %d/%d)", _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES)
+                raw_len = len(gen.text)
+                logger.warning(
+                    "empty response (stream, attempt %d/%d) raw_len=%d worker=%s",
+                    _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, raw_len, worker_name,
+                )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                     if request is not None:
                         _log_retry(request, alias, real_model, gen, kudos,
-                                   log_messages, _stream_input_tokens, _attempt_dur, "empty response")
+                                   log_messages, _stream_input_tokens, _attempt_dur, "empty response",
+                                   tool_info=f"raw_len={raw_len} worker={worker_name}",
+                                   response_text=gen.text)
                     continue
-                response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {len(gen.text)} chars]"
+                response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {raw_len} chars]"
 
             # Tool call detection — parse before streaming
             if tools_fmt:
+                _snippet = response_text[:200].replace("\n", " ")
+                logger.debug(
+                    "tool detection (stream): attempt %d/%d fmt=%s response=%r",
+                    _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, tools_fmt, _snippet,
+                )
                 tool_call = parse_tool_call(response_text, tools_fmt)
-                if tool_call is None and response_text.lstrip().startswith("<tool_call>"):
+                if tool_call is not None:
+                    _tool_info = f"detected: {tool_call.function.name} (fmt={tools_fmt})"
+                    logger.info("tool call detected (stream): name=%s fmt=%s", tool_call.function.name, tools_fmt)
+                elif response_text.lstrip().startswith("<tool_call>"):
+                    _tool_info = f"retry: invalid format (attempt {_attempt + 1}/{1 + _TOOL_FORMAT_MAX_RETRIES}, fmt={tools_fmt})"
                     logger.warning(
-                        "tool call with invalid formatting (attempt %d/%d)",
-                        _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES,
+                        "tool call with invalid formatting (stream, attempt %d/%d) fmt=%s response=%r",
+                        _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, tools_fmt, _snippet,
                     )
                     if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                         if request is not None:
                             _log_retry(request, alias, real_model, gen, kudos,
-                                       log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format")
+                                       log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format",
+                                       tool_info=_tool_info, response_text=response_text)
                         continue
-                    _snippet = response_text[:200].replace("\n", " ")
                     response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
+                else:
+                    _tool_info = f"not detected: plain text response (fmt={tools_fmt})"
+                    logger.info("tool call not detected (stream): treating as text fmt=%s response=%r", tools_fmt, _snippet)
             break
 
         job_done = True
 
         if tool_call:
+            status_code = "tool"
             # Emit tool_calls delta chunks (OpenClaw / OpenAI streaming protocol)
             # Chunk 1: tool name with empty arguments
             yield (
@@ -464,6 +511,7 @@ async def _stream_chat(
                     output_tokens=estimate_tokens(response_text),
                     reasoning_content=reasoning_content or "",
                     reasoning_tokens=estimate_tokens(reasoning_content or ""),
+                    tool_info=_tool_info,
                 )
                 request_log = getattr(request.app.state, "request_log", None)
                 if request_log is not None:

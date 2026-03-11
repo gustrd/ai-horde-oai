@@ -114,6 +114,18 @@ def render_messages(
                 tool_injection_used = True
             parts.append(tmpl["user"].format(content=content))
         elif msg.role == "assistant":
+            if msg.tool_calls:
+                # Render the tool call so history turns aren't empty
+                tc = msg.tool_calls[0]
+                try:
+                    args = json.loads(tc.function.arguments)
+                except (json.JSONDecodeError, ValueError):
+                    args = tc.function.arguments
+                tc_json = json.dumps({"name": tc.function.name, "arguments": args})
+                if template_name == "llama3":
+                    content = tc_json
+                else:
+                    content = f"<tool_call>\n{tc_json}\n</tool_call>"
             parts.append(tmpl["assistant"].format(content=content))
         elif msg.role == "tool":
             parts.append(format_tool_result(msg, template_name))
