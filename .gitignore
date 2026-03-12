@@ -218,4 +218,4 @@ history/
 .venv/
 
 # Claude-code
-.claude
+.claude/
