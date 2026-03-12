@@ -17,10 +17,11 @@ uv sync
 ## Usage
 
 ```bash
-uv run horde-oai
+uv run horde-oai        # HTTP server only
+uv run horde-oai-tui    # TUI (includes embedded HTTP server)
 ```
 
-The server starts on `http://0.0.0.0:8000` by default. A Textual TUI is available for interactive configuration, model browsing, chat, and request logs.
+The server starts on `http://0.0.0.0:8000` by default. The TUI provides interactive configuration, model browsing, chat, and request logs.
 
 ## Configuration
 
