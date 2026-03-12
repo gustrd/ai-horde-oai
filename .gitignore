@@ -216,3 +216,6 @@ history/
 
 # uv virtual environment
 .venv/
+
+# Claude-code
+.claude
