@@ -183,6 +183,10 @@ For tool-call responses the log detail modal now shows both the parsed JSON tool
 **File:** `app/tui/screens/logs.py`
 `action_clear()` now calls `save_entries()` after clearing `app.request_log`, so the JSONL log file is truncated immediately rather than retaining stale entries until the next write.
 
+### 37. Dashboard ban/reputation status widget — FIXED
+**Files:** `app/tui/widgets/ban_status.py` (new), `app/horde/client.py`, `app/tui/screens/dashboard.py`
+Added `BanStatusWidget` to the dashboard status panel showing three live ban signals: account suspicion score (from `HordeUser.suspicion`), IP block state (`ip_blocked_until`/`ip_block_reason`), and 429 cooldown (`rate_limited_until`). Colour-coded: plain text = all clear, yellow = warning (suspicion 1–4 or 429 cooldown), red = hard block (IP blocked or suspicion ≥ 5). Added public properties `ip_blocked_until`, `ip_block_reason`, `rate_limited_until` to `HordeClient`. Tests: 6 new tests in `test_tui.py`.
+
 ---
 
 ## Suggestions for Enhancement
@@ -215,7 +219,7 @@ Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/tem
 | `test_retry.py` | 22 | Retry: success, image, faulted, timeout, retries, backoff, corrupt prompt, IP block, check_ip_block, cancelled error |
 | `test_routing.py` | 19 | Routing: best/fast/default/alias/fallback, blocklist, exclude_model, config passing |
 | `test_model_table.py` | 19 | ModelTable: text filter, settings filters, wrapping, screen integration |
-| `test_tui.py` | 27 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history |
+| `test_tui.py` | 33 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history, ban status widget |
 | `test_unified_log_tui.py` | 16 | Log viewer: table display, detail modal, checked flag, filtering |
 | `test_e2e.py` | 16 | End-to-end integration |
 | `test_config.py` | 14 | Config: load/save/env overrides, client_agent validation, retry fields, suspicion |
@@ -230,7 +234,7 @@ Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/tem
 | `test_completions.py` | 6 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
 | `test_models.py` | 5 | Models list: fields, get found/not found, real names hidden |
 
-**Total: 306 passing, 1 skipped**
+**Total: 312 passing, 1 skipped**
 
 ---
 

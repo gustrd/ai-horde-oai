@@ -86,6 +86,32 @@ def _log_retry(
         pass
 
 
+def _log_model_ban(request: Request | None, alias: str, real_model: str) -> None:
+    """Emit a 'ban' log entry when a model is banned for being unavailable."""
+    if request is None:
+        return
+    try:
+        entry = RequestLogEntry(
+            timestamp=datetime.now(),
+            method=request.method,
+            path=request.url.path,
+            status="ban",
+            duration=0.0,
+            model=alias,
+            real_model=real_model,
+            error=f"{real_model} — unavailable (no workers), banned for 1h",
+            source="system",
+        )
+        request_log = getattr(request.app.state, "request_log", None)
+        if request_log is not None:
+            request_log.append(entry)
+        log_callback = getattr(request.app.state, "log_callback", None)
+        if log_callback is not None:
+            log_callback(entry)
+    except Exception:
+        pass
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: ChatCompletionRequest):
     horde: HordeClient = request.app.state.horde
@@ -163,18 +189,38 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
     _current_real_model = real_model
     _current_horde_req = horde_req
+    _transient_count = 0
+    _tried_models_ns: set[str] = set()
 
     async def _on_broaden():
-        nonlocal _current_real_model, _current_horde_req
-        # Ban the model that just failed
-        horde.ban_model(_current_real_model, duration=3600.0)
+        nonlocal _current_real_model, _current_horde_req, _transient_count
+        _count = horde.cached_model_count(_current_real_model)
+        _max_transient = config.retry.unavailable_max_transient_retries
+        if _count is not None and _count > 0 and _transient_count < _max_transient:
+            # Model still has workers — is_possible=False was transient, retry same model
+            _transient_count += 1
+            return
+        # Skip this model for the rest of the request.
+        # Only ban when count == 0 (truly offline); count > 0 means transient failure.
+        _transient_count = 0
+        _tried_models_ns.add(_current_real_model)
+        if _count is not None and _count == 0:
+            horde.ban_model(_current_real_model, duration=3600.0)
+            _log_model_ban(request, body.model, _current_real_model)
+        # Re-resolve excluding all models tried this request
         try:
             _models = await horde.get_enriched_models()
-            _new_model = await model_router.resolve(body.model, _models, config=config, exclude_model=_current_real_model)
-            if _new_model != _current_real_model:
+            _new_model = await model_router.resolve(
+                body.model, _models, config=config, exclude_models=_tried_models_ns
+            )
+            if _new_model not in _tried_models_ns:
                 logger.info("re-resolved %r -> %r after failure", body.model, _new_model)
                 _current_real_model = _new_model
                 _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+            else:
+                raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}")
+        except HordeNoModelsRemainingError:
+            raise
         except Exception as e:
             logger.warning("failed to re-resolve alias %r: %s", body.model, e)
             raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}") from e
@@ -400,6 +446,8 @@ async def _stream_chat(
         )
         
         _attempt = 0
+        _transient_count = 0
+        _tried_models: set[str] = set()
         while _attempt <= _TOOL_FORMAT_MAX_RETRIES:
             _attempt_start = time.monotonic()
 
@@ -456,8 +504,23 @@ async def _stream_chat(
 
                     if not status.is_possible:
                         await horde.cancel_text_job(job_id)
-                        horde.ban_model(real_model, duration=3600.0)
-                        _abort_reason = "impossible"
+                        _count = horde.cached_model_count(real_model)
+                        _max_transient = config.retry.unavailable_max_transient_retries if config else 2
+                        if _count is not None and _count > 0 and _transient_count < _max_transient:
+                            # Transient — model still has workers, retry without banning
+                            _transient_count += 1
+                            _abort_reason = "transient"
+                        else:
+                            # Exhausted transient budget or model has no workers.
+                            # Only ban if count == 0 (truly offline). When count > 0
+                            # the failure is still transient — skip for this request
+                            # only, no global ban.
+                            _transient_count = 0
+                            _tried_models.add(real_model)
+                            if _count is not None and _count == 0:
+                                horde.ban_model(real_model, duration=3600.0)
+                                _log_model_ban(request, alias, real_model)
+                            _abort_reason = "impossible"
                         yield ": x-horde-abort reason=impossible\n\n"
                         break
 
@@ -495,24 +558,31 @@ async def _stream_chat(
 
                     await asyncio.sleep(config.retry.poll_interval if config else 2.0)
 
+            if _abort_reason == "transient":
+                # is_possible=False but model still has workers — resubmit same model
+                await asyncio.sleep(config.retry.poll_interval if config else 2.0)
+                continue
+
             if _abort_reason == "impossible":
                 # Try re-resolving the alias against the now-filtered model list (P1-C)
                 _fallback_model = None
                 if model_router is not None:
                     try:
                         _fb_models = await horde.get_enriched_models()
-                        # Pass real_model as exclude so we don't pick it again if it was a direct name
-                        _fallback_model = await model_router.resolve(alias, _fb_models, config=config, exclude_model=real_model)
+                        # Exclude all models tried this request so we don't cycle back
+                        _fallback_model = await model_router.resolve(
+                            alias, _fb_models, config=config, exclude_models=_tried_models
+                        )
                     except Exception:
                         _fallback_model = None
-                if _fallback_model and _fallback_model != real_model:
+                if _fallback_model and _fallback_model not in _tried_models:
                     real_model = _fallback_model
                     horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
                     # Delay before retry (DEFAULT RETRY INTERVAL)
                     await asyncio.sleep(config.retry.poll_interval if config else 2.0)
                     continue  # retry with new model without incrementing _attempt
-                # No fallback available — fail with clear message
+                # No untried fallback available — fail with clear message
                 response_text = "[MODEL_UNAVAILABLE: no valid active workers on AI Horde]"
                 status_code = "unav."
                 reasoning_content = None

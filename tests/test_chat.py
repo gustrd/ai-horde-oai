@@ -430,6 +430,7 @@ async def test_stream_chat_is_possible_false_aborts_immediately():
     horde.poll_text_status = AsyncMock(return_value=impossible_status)
     horde.cancel_text_job = AsyncMock()
     horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=0)  # count=0 → truly offline
 
     chunks = []
     gen = _stream_chat(horde, MagicMock(), "best", "dead-model", stall_timeout=9999, max_retries=2)
@@ -512,6 +513,7 @@ async def test_stream_chat_impossible_fallback_to_new_model():
     horde.poll_text_status = AsyncMock(side_effect=[impossible, done_status])
     horde.cancel_text_job = AsyncMock()
     horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=0)  # count=0 → ban on impossible
     horde.get_enriched_models = AsyncMock(return_value=[
         HordeModel(name="old-model", count=0),
         HordeModel(name="new-model", count=1, eta=0, queued=0),
@@ -519,9 +521,9 @@ async def test_stream_chat_impossible_fallback_to_new_model():
 
     # Model router that returns a different model on second call (fallback)
     resolve_calls = []
-    async def _resolve(alias, models, config=None, exclude_model=None):
-        resolve_calls.append(exclude_model)
-        if not exclude_model:
+    async def _resolve(alias, models, config=None, exclude_model=None, exclude_models=None):
+        resolve_calls.append(exclude_models)
+        if not exclude_models:
             return "old-model"
         return "new-model"
     model_router = MagicMock()
@@ -550,14 +552,18 @@ async def test_stream_chat_impossible_fallback_to_new_model():
 
 
 async def test_chat_completions_is_possible_false_retries(app, client, respx_mock):
-    """Non-streaming: is_possible=False retries by re-resolving the model."""
+    """Non-streaming: is_possible=False (count=0) re-resolves and ultimately returns 504."""
     impossible = {
         "done": False, "faulted": False, "processing": 0, "waiting": 1,
         "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
         "generations": [], "is_possible": False,
     }
-    # Use exact URL overrides (respx resolves exact-URL routes LIFO, so last-added wins).
-    # Override the status poll for test-job-id to always return is_possible=False.
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # Single model with count=0 so ban triggers → re-resolve finds nothing → 504
+    zero_models = [{"name": target_model, "count": 0, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=zero_models)
+    )
     respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
         return_value=httpx.Response(200, json=impossible)
     )
@@ -565,31 +571,28 @@ async def test_chat_completions_is_possible_false_retries(app, client, respx_moc
         return_value=httpx.Response(200, json={"message": "Cancelled"})
     )
     app.state.config = app.state.config.model_copy(
-        update={"retry": _fast_retry(max_retries=1, timeout_seconds=60)}
+        update={"retry": _fast_retry(max_retries=1, timeout_seconds=1)}
     )
-    # Invalidate the horde model cache so on_broaden re-fetches (returns MODELS_FIXTURE
-    # minus the banned model); with only one model available and it now banned, the
-    # second attempt also fails — 2 attempts exhaust → HordeTimeoutError → 504.
     app.state.horde.invalidate_model_cache()
     response = await client.post(
         "/v1/chat/completions",
-        json={
-            "model": "best",
-            "messages": [{"role": "user", "content": "Hello!"}],
-        },
+        json={"model": target_model, "messages": [{"role": "user", "content": "Hello!"}]},
     )
     assert response.status_code == 504
 
 
 async def test_chat_completions_is_possible_false_bans_model(app, client, respx_mock):
-    """Non-streaming: is_possible=False bans the model for 1h."""
+    """Non-streaming: is_possible=False with count=0 bans the model for 1h."""
     impossible = {
         "done": False, "faulted": False, "processing": 0, "waiting": 1,
         "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
         "generations": [], "is_possible": False,
     }
-    # Use exact URL overrides (respx resolves exact-URL routes LIFO, so last-added wins).
-    # Override the status poll for test-job-id to always return is_possible=False.
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    zero_models = [{"name": target_model, "count": 0, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=zero_models)
+    )
     respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
         return_value=httpx.Response(200, json=impossible)
     )
@@ -597,22 +600,366 @@ async def test_chat_completions_is_possible_false_bans_model(app, client, respx_
         return_value=httpx.Response(200, json={"message": "Cancelled"})
     )
     app.state.config = app.state.config.model_copy(
-        update={"retry": _fast_retry(max_retries=1, timeout_seconds=60)}
+        update={"retry": _fast_retry(max_retries=1, timeout_seconds=1)}
     )
     app.state.horde.invalidate_model_cache()
-    # Let the error propagate so we can assert the model was banned during the attempt.
-    # It will surface as a 504 HordeTimeoutError because all attempts fail.
     response = await client.post(
         "/v1/chat/completions",
-        json={
-            "model": "best",
-            "messages": [{"role": "user", "content": "Hello!"}],
-        },
+        json={"model": target_model, "messages": [{"role": "user", "content": "Hello!"}]},
     )
     assert response.status_code == 504
-    # The resolved model should be banned
+    # The model with no workers should be banned
     horde = app.state.horde
     assert len(horde._banned_models) > 0
+
+
+async def test_chat_completions_is_possible_false_emits_ban_log(app, client, respx_mock):
+    """Non-streaming: is_possible=False with count=0 emits a 'ban' entry to request_log."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # Single model with count=0 so cached_model_count() returns 0 (truly offline)
+    zero_models = [{"name": target_model, "count": 0, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=zero_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": _fast_retry(max_retries=0, timeout_seconds=1)}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    # Direct model name: resolve() accepts it via name-match even with count=0
+    await client.post(
+        "/v1/chat/completions",
+        json={"model": target_model, "messages": [{"role": "user", "content": "Hello!"}]},
+    )
+
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) >= 1
+    assert ban_entries[0].real_model != ""
+    assert "banned" in ban_entries[0].error.lower() or "unavailable" in ban_entries[0].error.lower()
+
+
+async def test_chat_completions_is_possible_false_transient_no_ban(app, client, respx_mock):
+    """Non-streaming: is_possible=False with count>0 does NOT ban the model."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # Single model with count=5 — is_possible=False is transient, should NOT ban
+    live_models = [{"name": target_model, "count": 5, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=live_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": RetrySettings(max_retries=0, timeout_seconds=1, broaden_on_retry=False,
+                                       backoff_base=0.0, poll_interval=0.0,
+                                       unavailable_max_transient_retries=0)}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    await client.post(
+        "/v1/chat/completions",
+        json={"model": target_model, "messages": [{"role": "user", "content": "Hello!"}]},
+    )
+
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) == 0, "Model with workers should not be banned when transient retries disabled"
+
+
+async def test_stream_chat_is_possible_false_emits_ban_log():
+    """Streaming: is_possible=False with count=0 emits a 'ban' entry to request_log."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.routers.chat import _stream_chat
+    from app.schemas.horde import HordeJobStatus
+    from app.log_store import RequestLogEntry
+
+    impossible_status = HordeJobStatus(
+        done=False, faulted=False, is_possible=False, generations=[], kudos=0,
+    )
+
+    horde = AsyncMock()
+    horde.check_ip_block = MagicMock()
+    horde.submit_text_job = AsyncMock(return_value="job-ban-log")
+    horde.poll_text_status = AsyncMock(return_value=impossible_status)
+    horde.cancel_text_job = AsyncMock()
+    horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=0)  # count=0 → truly offline
+
+    request_log: list[RequestLogEntry] = []
+
+    mock_state = MagicMock()
+    mock_state.request_log = request_log
+    mock_state.log_callback = None
+    mock_request = MagicMock()
+    mock_request.app.state = mock_state
+    mock_request.method = "POST"
+    mock_request.url.path = "/v1/chat/completions"
+
+    from app.schemas.horde import HordeTextRequest
+    horde_req = HordeTextRequest(models=["dead-model"], prompt="Hi")
+
+    chunks = []
+    async for chunk in _stream_chat(
+        horde=horde,
+        horde_req=horde_req,
+        alias="best",
+        real_model="dead-model",
+        request=mock_request,
+        max_retries=0,
+    ):
+        chunks.append(chunk)
+
+    ban_entries = [e for e in request_log if e.status == "ban"]
+    assert len(ban_entries) == 1
+    assert ban_entries[0].real_model == "dead-model"
+    assert ban_entries[0].model == "best"
+
+
+async def test_stream_chat_is_possible_false_transient_no_ban():
+    """Streaming: is_possible=False with count>0 does NOT ban the model."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.routers.chat import _stream_chat
+    from app.schemas.horde import HordeJobStatus
+    from app.log_store import RequestLogEntry
+
+    impossible_status = HordeJobStatus(
+        done=False, faulted=False, is_possible=False, generations=[], kudos=0,
+    )
+
+    horde = AsyncMock()
+    horde.check_ip_block = MagicMock()
+    horde.submit_text_job = AsyncMock(return_value="job-transient")
+    horde.poll_text_status = AsyncMock(return_value=impossible_status)
+    horde.cancel_text_job = AsyncMock()
+    horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=5)  # count>0 → transient
+
+    request_log: list[RequestLogEntry] = []
+
+    mock_state = MagicMock()
+    mock_state.request_log = request_log
+    mock_state.log_callback = None
+    mock_request = MagicMock()
+    mock_request.app.state = mock_state
+    mock_request.method = "POST"
+    mock_request.url.path = "/v1/chat/completions"
+
+    from app.schemas.horde import HordeTextRequest
+    from app.config import RetrySettings
+    horde_req = HordeTextRequest(models=["live-model"], prompt="Hi")
+    config = RetrySettings(max_retries=0, timeout_seconds=0, unavailable_max_transient_retries=0, poll_interval=0.0)
+
+    chunks = []
+    async for chunk in _stream_chat(
+        horde=horde,
+        horde_req=horde_req,
+        alias="best",
+        real_model="live-model",
+        request=mock_request,
+        max_retries=0,
+        config=type("S", (), {"retry": config, "stream_stall_timeout": 1})(),
+    ):
+        chunks.append(chunk)
+
+    ban_entries = [e for e in request_log if e.status == "ban"]
+    assert len(ban_entries) == 0, "Model with workers should not be banned"
+    horde.ban_model.assert_not_called()
+
+
+async def test_stream_chat_count_positive_transient_exhausted_no_ban():
+    """Streaming: count>0 but transient budget exhausted → NO global ban, MODEL_UNAVAILABLE."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.routers.chat import _stream_chat
+    from app.schemas.horde import HordeJobStatus, HordeTextRequest
+    from app.config import RetrySettings, Settings
+
+    impossible = HordeJobStatus(done=False, faulted=False, is_possible=False, generations=[], kudos=0)
+
+    horde = AsyncMock()
+    horde.check_ip_block = MagicMock()
+    # 3 submits: initial + 2 transient retries = budget of 2 exhausted on 3rd poll
+    horde.submit_text_job = AsyncMock(side_effect=["job-1", "job-2", "job-3"])
+    horde.poll_text_status = AsyncMock(return_value=impossible)
+    horde.cancel_text_job = AsyncMock()
+    horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=5)  # count>0 always
+    horde.get_enriched_models = AsyncMock(return_value=[])  # no fallback available
+
+    cfg = Settings(
+        horde_api_key="k",
+        retry=RetrySettings(
+            max_retries=0, poll_interval=0.0, streaming_retry_delay=0.0,
+            unavailable_max_transient_retries=2,
+        ),
+    )
+
+    horde_req = HordeTextRequest(models=["live-model"], prompt="Hi")
+    chunks = []
+    async for chunk in _stream_chat(
+        horde=horde,
+        horde_req=horde_req,
+        alias="best",
+        real_model="live-model",
+        stall_timeout=9999,
+        max_retries=0,
+        config=cfg,
+    ):
+        chunks.append(chunk)
+
+    all_text = "".join(chunks)
+    # 3 job submissions: 1 initial + 2 transient retries
+    assert horde.submit_text_job.await_count == 3
+    # Model with workers must NEVER be banned
+    horde.ban_model.assert_not_called()
+    # Should still give a useful error response
+    content = "".join(
+        json.loads(l[6:])["choices"][0]["delta"].get("content") or ""
+        for l in all_text.splitlines()
+        if l.startswith("data: ") and l != "data: [DONE]"
+    )
+    assert "MODEL_UNAVAILABLE" in content
+
+
+async def test_stream_chat_count_positive_exhausted_passes_exclude_models_to_resolve():
+    """Streaming: after transient exhaustion, resolve() receives exclude_models with the failed model."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.routers.chat import _stream_chat
+    from app.schemas.horde import HordeJobStatus, HordeTextRequest, HordeModel, HordeGeneration
+    from app.config import RetrySettings, Settings
+
+    impossible = HordeJobStatus(done=False, faulted=False, is_possible=False, generations=[], kudos=0)
+    done_status = HordeJobStatus(
+        done=True, faulted=False, kudos=1.0,
+        generations=[HordeGeneration(text="ok", model="new-model", worker_id="w", worker_name="n", kudos=1)],
+    )
+
+    horde = AsyncMock()
+    horde.check_ip_block = MagicMock()
+    # 3 impossible (budget=2) then 1 success on new model
+    horde.submit_text_job = AsyncMock(side_effect=["job-1", "job-2", "job-3", "job-4"])
+    horde.poll_text_status = AsyncMock(side_effect=[impossible, impossible, impossible, done_status])
+    horde.cancel_text_job = AsyncMock()
+    horde.ban_model = MagicMock()
+    horde.cached_model_count = MagicMock(return_value=5)
+    horde.get_enriched_models = AsyncMock(return_value=[
+        HordeModel(name="live-model", count=5),
+        HordeModel(name="new-model", count=3, eta=0, queued=0),
+    ])
+
+    cfg = Settings(
+        horde_api_key="k",
+        retry=RetrySettings(
+            max_retries=0, poll_interval=0.0, streaming_retry_delay=0.0,
+            unavailable_max_transient_retries=2,
+        ),
+    )
+
+    resolve_kwargs_list: list[dict] = []
+
+    async def _capture_resolve(alias, models, config=None, exclude_model=None, exclude_models=None):
+        resolve_kwargs_list.append({"exclude_model": exclude_model, "exclude_models": exclude_models})
+        if exclude_models and "live-model" in exclude_models:
+            return "new-model"
+        return "live-model"
+
+    model_router = MagicMock()
+    model_router.resolve = _capture_resolve
+
+    horde_req = HordeTextRequest(models=["live-model"], prompt="Hi")
+    chunks = []
+    async for chunk in _stream_chat(
+        horde=horde,
+        horde_req=horde_req,
+        alias="best",
+        real_model="live-model",
+        stall_timeout=9999,
+        max_retries=0,
+        config=cfg,
+        model_router=model_router,
+    ):
+        chunks.append(chunk)
+
+    all_text = "".join(chunks)
+    # ban_model must NOT be called (count > 0)
+    horde.ban_model.assert_not_called()
+    # resolve was called with exclude_models containing the failed model
+    assert any(
+        kw.get("exclude_models") and "live-model" in kw["exclude_models"]
+        for kw in resolve_kwargs_list
+    ), f"Expected exclude_models to contain 'live-model', got: {resolve_kwargs_list}"
+    # Should succeed with fallback model
+    content = "".join(
+        json.loads(l[6:])["choices"][0]["delta"].get("content") or ""
+        for l in all_text.splitlines()
+        if l.startswith("data: ") and l != "data: [DONE]"
+    )
+    assert content == "ok"
+
+
+async def test_chat_completions_count_positive_exhausted_no_ban(app, client, respx_mock):
+    """Non-streaming: count>0 but transient budget exhausted → NO ban, 504 returned."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 0.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # count=5: model has workers, so is_possible=False must be treated as transient
+    live_models = [{"name": target_model, "count": 5, "queued": 0, "jobs": 0.0, "eta": 0,
+                    "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=live_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": RetrySettings(
+            max_retries=0, timeout_seconds=1, broaden_on_retry=False,
+            backoff_base=0.0, poll_interval=0.0,
+            unavailable_max_transient_retries=2,
+        )}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={"model": target_model, "messages": [{"role": "user", "content": "Hello!"}]},
+    )
+
+    # Request ultimately fails (no fallback model after skipping the transient one)
+    assert response.status_code == 504
+    # Model with workers must NOT be banned globally
+    assert len(app.state.horde._banned_models) == 0, (
+        f"Model was wrongly banned: {app.state.horde._banned_models}"
+    )
+    # No ban log entry
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) == 0, "Model with active workers should not emit a ban log entry"
 
 
 # ── IP block / CorruptPrompt integration tests ────────────────────────────────

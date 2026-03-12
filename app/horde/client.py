@@ -107,6 +107,38 @@ class HordeClient:
         await self._global_delay.wait()
         return await self.http.request(method, url, **kwargs)
 
+    def cached_model_count(self, name: str) -> int | None:
+        """Return the cached worker count for *name* without applying ban filters.
+
+        Returns:
+            None   — model not found in cache (unknown to Horde, already gone)
+            0      — model found but has no active workers (truly offline)
+            > 0    — model found and has workers (is_possible=False was transient)
+        """
+        for cache in (self._enriched_cache, self._model_cache):
+            for m in cache:
+                if m.name == name:
+                    return m.count
+        return None
+
+    @property
+    def banned_models(self) -> dict[str, float]:
+        """Return active model bans as {name: expiry_monotonic}. Expired bans are excluded."""
+        now = time.monotonic()
+        return {n: exp for n, exp in self._banned_models.items() if exp > now}
+
+    @property
+    def ip_blocked_until(self) -> float:
+        return self._ip_blocked_until
+
+    @property
+    def ip_block_reason(self) -> str:
+        return self._ip_block_reason
+
+    @property
+    def rate_limited_until(self) -> float:
+        return self._rate_limited_until
+
     def check_ip_block(self) -> None:
         """Raise immediately if the IP is in a local cooldown (TimeoutIP / UnsafeIP)."""
         now = time.monotonic()

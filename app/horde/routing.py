@@ -41,22 +41,29 @@ class ModelRouter:
         return min(candidates, key=lambda m: (m.eta, m.queued)).name
 
     async def resolve(
-        self, 
-        alias: str, 
-        models: list[HordeModel], 
+        self,
+        alias: str,
+        models: list[HordeModel],
         config: Settings | None = None,
         exclude_model: str | None = None,
+        exclude_models: set[str] | None = None,
     ) -> str:
         """Resolve a dummy alias to a real Horde model name.
 
         config: use this instead of self.config (allows per-request config).
         exclude_model: do not pick this specific model (fallback to another candidate).
+        exclude_models: do not pick any of these models (per-request skip set).
         """
         cfg = config if config is not None else self.config
-        
-        # Filter out the model we're explicitly trying to avoid
+
+        # Filter out models we're explicitly trying to avoid
+        _excluded = set()
         if exclude_model:
-            models = [m for m in models if m.name != exclude_model]
+            _excluded.add(exclude_model)
+        if exclude_models:
+            _excluded.update(exclude_models)
+        if _excluded:
+            models = [m for m in models if m.name not in _excluded]
 
         if alias == "best":
             return self._pick_best(models, cfg)

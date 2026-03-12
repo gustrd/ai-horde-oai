@@ -2,7 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
+
+
+def _fmt_remaining(seconds: float) -> str:
+    s = int(seconds)
+    if s >= 3600:
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    if s >= 60:
+        return f"{s // 60}m {s % 60}s"
+    return f"{s}s"
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
@@ -10,6 +20,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Label, Static
 from textual.containers import Horizontal
 
+from app.tui.widgets.ban_status import BanStatusWidget
 from app.tui.widgets.kudos_bar import KudosBar
 
 
@@ -55,6 +66,16 @@ class DashboardScreen(Screen):
     DashboardScreen #kudos-bar {
         dock: bottom;
     }
+    DashboardScreen #banned-panel {
+        border: round $error;
+        padding: 1 2;
+        margin: 0 1 1 1;
+        height: auto;
+        display: none;
+    }
+    DashboardScreen #banned-panel.visible {
+        display: block;
+    }
     DashboardScreen #action-row {
         height: auto;
         margin: 0 1;
@@ -76,12 +97,16 @@ class DashboardScreen(Screen):
             yield Label("", id="server-status", classes="stat-row", markup=False)
             yield Label("", id="api-key-status", classes="stat-row", markup=False)
             yield Label("", id="horde-status", classes="stat-row", markup=False)
+            yield BanStatusWidget(id="ban-status")
             yield Label("", id="model-stats", classes="stat-row-last", markup=False)
         with Static(id="stats-panel"):
             yield Label("Activity", classes="panel-title", markup=False)
             yield Label("", id="request-stats", classes="stat-row", markup=False)
             yield Label("", id="session-stats", classes="stat-row", markup=False)
             yield Label("", id="last-request", classes="stat-row-last", markup=False)
+        with Static(id="banned-panel"):
+            yield Label("Unavailable Models (temp. banned)", classes="panel-title", markup=False)
+            yield Label("", id="banned-models", markup=False)
         with Horizontal(id="action-row"):
             yield Button("Unban Unavailable Models", id="unban-btn", variant="error")
         yield KudosBar(id="kudos-bar")
@@ -126,6 +151,8 @@ class DashboardScreen(Screen):
         if horde is None:
             self.query_one("#horde-status", Label).update("  Horde   : not connected")
             self.query_one("#session-stats", Label).update("  Kudos   : —")
+            self.query_one(BanStatusWidget).clear()
+            self._refresh_banned()
             return
 
         # Fetch models, workers, and user info concurrently
@@ -208,8 +235,37 @@ class DashboardScreen(Screen):
         else:
             self.query_one("#session-stats", Label).update("  Kudos   : —")
 
-        # Refresh other labels now that model counts are updated
+        # Update ban/reputation status widget
+        suspicion = int(getattr(user_result, "suspicion", 0)) if user_result is not None else 0
+        self.query_one(BanStatusWidget).set_status(
+            suspicion=suspicion,
+            ip_blocked_until=horde.ip_blocked_until,
+            ip_block_reason=horde.ip_block_reason,
+            rate_limited_until=horde.rate_limited_until,
+        )
+
+        # Refresh other labels and banned-models panel
         self._refresh_labels()
+        self._refresh_banned()
+
+    def _refresh_banned(self) -> None:
+        horde = getattr(self.app, "horde", None)
+        panel = self.query_one("#banned-panel", Static)
+        label = self.query_one("#banned-models", Label)
+        if horde is None:
+            panel.remove_class("visible")
+            return
+        bans = horde.banned_models  # {name: expiry_monotonic}
+        if not bans:
+            panel.remove_class("visible")
+            return
+        now = time.monotonic()
+        lines = []
+        for name, expiry in sorted(bans.items(), key=lambda kv: kv[1]):
+            remaining = _fmt_remaining(max(0.0, expiry - now))
+            lines.append(f"  {name}  ({remaining})")
+        label.update("\n".join(lines))
+        panel.add_class("visible")
 
     def watch_models_count(self, _: int) -> None:
         self._refresh_labels()
@@ -236,5 +292,6 @@ class DashboardScreen(Screen):
             horde = getattr(self.app, "horde", None)
             if horde:
                 horde.unban_all_models()
+                self._refresh_banned()
                 self.notify("Unavailable model bans cleared")
                 self.action_refresh()

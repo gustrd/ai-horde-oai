@@ -20,6 +20,10 @@ class RetrySettings(BaseModel):
     rate_limit_backoff: float = 5.0   # seconds to freeze submissions after a 429
     streaming_retry_delay: float = 2.0  # seconds between streaming retry attempts
     poll_interval: float = 2.0         # seconds between status polls
+    unavailable_max_transient_retries: int = 2
+    # When is_possible=False but the model still has workers in cache (count > 0),
+    # retry up to this many times before giving up and banning. Set to 0 to disable
+    # transient retries and always ban on first is_possible=False.
 
 
 class ImageDefaults(BaseModel):

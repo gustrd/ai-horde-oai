@@ -202,3 +202,36 @@ async def test_fast_and_best_raise_when_all_count_zero():
         await router.resolve("fast", models)
     with pytest.raises(ModelNotFoundError):
         await router.resolve("best", models)
+
+
+@pytest.mark.asyncio
+async def test_resolve_exclude_models_set(router):
+    """exclude_models set removes all named models from candidates."""
+    # Exclude the two best/fast models — only llama-70b remains
+    result = await router.resolve(
+        "best",
+        MODELS,
+        exclude_models={"aphrodite/llama-3.1-8b", "koboldcpp/mistral-nemo-12b"},
+    )
+    assert result == "aphrodite/llama-3.1-70b"
+
+
+@pytest.mark.asyncio
+async def test_resolve_exclude_models_and_exclude_model_combined(router):
+    """exclude_model and exclude_models are combined — union of both is excluded."""
+    # exclude_model removes llama-8b, exclude_models removes mistral
+    result = await router.resolve(
+        "best",
+        MODELS,
+        exclude_model="aphrodite/llama-3.1-8b",
+        exclude_models={"koboldcpp/mistral-nemo-12b"},
+    )
+    assert result == "aphrodite/llama-3.1-70b"
+
+
+@pytest.mark.asyncio
+async def test_resolve_exclude_models_all_raises(router):
+    """Excluding all models raises ModelNotFoundError."""
+    all_names = {m.name for m in MODELS}
+    with pytest.raises(ModelNotFoundError):
+        await router.resolve("best", MODELS, exclude_models=all_names)

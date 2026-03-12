@@ -37,12 +37,16 @@ def make_config(**overrides) -> Settings:
     return Settings(**defaults)
 
 
-def make_horde_mock(models=None, user=None):
+def make_horde_mock(models=None, user=None, ip_blocked_until=0.0, ip_block_reason="", rate_limited_until=0.0, banned_models=None):
     mock = AsyncMock()
     mock.get_models = AsyncMock(return_value=models or [])
     mock.get_text_workers = AsyncMock(return_value=[])
     mock.get_user = AsyncMock(return_value=user or HordeUser(username="testuser", kudos=5000))
     mock.close = AsyncMock()
+    mock.ip_blocked_until = ip_blocked_until
+    mock.ip_block_reason = ip_block_reason
+    mock.rate_limited_until = rate_limited_until
+    mock.banned_models = banned_models if banned_models is not None else {}
     return mock
 
 
@@ -78,6 +82,13 @@ async def test_welcome_anon_button_posts_message():
          patch("app.tui.app.save_config"), \
          patch("app.tui.app.HordeClient") as mock_client:
         mock_client.return_value.close = AsyncMock()
+        mock_client.return_value.ip_blocked_until = 0.0
+        mock_client.return_value.ip_block_reason = ""
+        mock_client.return_value.rate_limited_until = 0.0
+        mock_client.return_value.banned_models = {}
+        mock_client.return_value.get_models = AsyncMock(return_value=[])
+        mock_client.return_value.get_text_workers = AsyncMock(return_value=[])
+        mock_client.return_value.get_user = AsyncMock(return_value=HordeUser(username="anon"))
         async with app.run_test() as pilot:
             await app.push_screen(WelcomeScreen())
             await pilot.pause()
@@ -264,6 +275,214 @@ async def test_dashboard_model_stats_reflects_filters():
             # 1 shown (mistral blocked), 2 total
             assert dash.models_count == 1
             assert dash.total_models == 2
+
+
+# ---------------------------------------------------------------------------
+# Banned models panel tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_banned_panel_hidden_when_no_bans():
+    """Banned models panel is hidden when there are no active bans."""
+    from textual.widgets import Static
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(banned_models={})
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            panel = screen.query_one("#banned-panel", Static)
+            assert "visible" not in panel.classes
+
+
+@pytest.mark.asyncio
+async def test_banned_panel_visible_with_bans():
+    """Banned models panel shows when there are active model bans."""
+    import time
+    from textual.widgets import Static
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(banned_models={
+        "aphrodite/llama-3.1-70b-instruct": time.monotonic() + 3600.0,
+    })
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            panel = screen.query_one("#banned-panel", Static)
+            assert "visible" in panel.classes
+            label = screen.query_one("#banned-models", Label)
+            text = str(label.content)
+            assert "aphrodite/llama-3.1-70b-instruct" in text
+
+
+@pytest.mark.asyncio
+async def test_banned_panel_shows_remaining_time():
+    """Banned models label includes the remaining ban duration."""
+    import time
+    from textual.widgets import Static
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(banned_models={
+        "koboldcpp/mistral-7b": time.monotonic() + 125.0,  # 2m 5s
+    })
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            label = screen.query_one("#banned-models", Label)
+            text = str(label.content)
+            assert "2m" in text
+
+
+@pytest.mark.asyncio
+async def test_banned_panel_hidden_when_no_client():
+    """Banned models panel stays hidden when there is no horde client."""
+    from textual.widgets import Static
+
+    config = make_config()
+    app = HordeApp(config=config)
+    # No horde client
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+            panel = screen.query_one("#banned-panel", Static)
+            assert "visible" not in panel.classes
+
+
+# ---------------------------------------------------------------------------
+# BanStatusWidget tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_renders_in_dashboard():
+    """Dashboard mounts with a BanStatusWidget present."""
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one(BanStatusWidget)
+
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_all_clear():
+    """BanStatusWidget shows all-clear text when no bans are active."""
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock()
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            widget = screen.query_one(BanStatusWidget)
+            text = str(widget.query_one(Label).content)
+            assert "suspicion:0" in text
+            assert "IP:ok" in text
+            assert "429:ok" in text
+
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_suspicion_warning():
+    """BanStatusWidget shows suspicion score when > 0."""
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(user=HordeUser(username="testuser", kudos=1000, suspicion=3))
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            widget = screen.query_one(BanStatusWidget)
+            text = str(widget.query_one(Label).content)
+            assert "suspicion:3" in text
+
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_ip_block():
+    """BanStatusWidget shows IP block reason and remaining time."""
+    import time
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(
+        ip_blocked_until=time.monotonic() + 1800.0,
+        ip_block_reason="TimeoutIP",
+    )
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            widget = screen.query_one(BanStatusWidget)
+            text = str(widget.query_one(Label).content)
+            assert "IP:TimeoutIP" in text
+
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_rate_limit_cooldown():
+    """BanStatusWidget shows 429 cooldown when rate-limited."""
+    import time
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+    app.horde = make_horde_mock(rate_limited_until=time.monotonic() + 10.0)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause(0.5)
+            widget = screen.query_one(BanStatusWidget)
+            text = str(widget.query_one(Label).content)
+            assert "429:cooldown" in text
+
+
+@pytest.mark.asyncio
+async def test_ban_status_widget_no_client():
+    """BanStatusWidget shows dash (—) when horde client is not connected."""
+    from app.tui.widgets.ban_status import BanStatusWidget
+
+    config = make_config()
+    app = HordeApp(config=config)
+    # No horde client set
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()):
+        async with app.run_test() as pilot:
+            screen = DashboardScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+            widget = screen.query_one(BanStatusWidget)
+            text = str(widget.query_one(Label).content)
+            assert "—" in text
 
 
 # ---------------------------------------------------------------------------

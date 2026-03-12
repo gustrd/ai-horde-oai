@@ -22,7 +22,8 @@
       "Bash(grep -r \"unknown client\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde --include=\"*.py\" -B 5 -A 5 2>/dev/null | head -80)",
       "Bash(grep -rn \"Client-Agent.*in\\\\|args\\\\[.*Client-Agent.*\\\\]\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" 2>/dev/null | grep -v \"self.args\\\\|client_agent\" | head -20)",
       "Bash(find /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde -type f \\\\\\( -name \"*list*\" -o -name \"*block*\" -o -name \"*ban*\" \\\\\\) 2>/dev/null | head -20)",
-      "Bash(grep -rn \"args\\\\[.Client-Agent.\\\\].*in\\\\|\\\\.startswith\\\\|\\\\.endswith\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" 2>/dev/null | grep -i \"client\\\\|agent\")"
+      "Bash(grep -rn \"args\\\\[.Client-Agent.\\\\].*in\\\\|\\\\.startswith\\\\|\\\\.endswith\" /c/Users/gustr/_git/ai-horde-oai/refs/AI-Horde/horde/apis --include=\"*.py\" 2>/dev/null | grep -i \"client\\\\|agent\")",
+      "Bash(find C:/Users/gustr/_git/ai-horde-oai/app -type f -name \"*.py\" 2>/dev/null | sort)"
     ]
   }
 }

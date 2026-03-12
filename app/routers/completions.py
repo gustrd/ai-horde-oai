@@ -5,10 +5,10 @@ from contextlib import nullcontext
 from fastapi import APIRouter, HTTPException, Request
 
 from app.horde.client import HordeClient, HordeError
-from app.horde.retry import HordeTimeoutError, with_retry
+from app.horde.retry import HordeNoModelsRemainingError, HordeTimeoutError, with_retry
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.translate import completion_to_horde
-from app.routers.chat import _horde_error
+from app.routers.chat import _horde_error, _log_model_ban
 from app.log_store import estimate_tokens
 from app.schemas.horde import HordeJobStatus
 from app.schemas.openai import CompletionChoice, CompletionRequest, CompletionResponse, Usage
@@ -41,18 +41,38 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
 
     _current_real_model = real_model
     _current_horde_req = horde_req
+    _transient_count = 0
+    _tried_models: set[str] = set()
 
     async def _on_broaden():
-        nonlocal _current_real_model, _current_horde_req
-        horde.ban_model(_current_real_model, duration=3600.0)
+        nonlocal _current_real_model, _current_horde_req, _transient_count
+        _count = horde.cached_model_count(_current_real_model)
+        _max_transient = config.retry.unavailable_max_transient_retries
+        if _count is not None and _count > 0 and _transient_count < _max_transient:
+            # Model still has workers — is_possible=False was transient, retry same model
+            _transient_count += 1
+            return
+        # Skip this model for the rest of the request.
+        # Only ban when count == 0 (truly offline); count > 0 means transient failure.
+        _transient_count = 0
+        _tried_models.add(_current_real_model)
+        if _count is not None and _count == 0:
+            horde.ban_model(_current_real_model, duration=3600.0)
+            _log_model_ban(request, body.model, _current_real_model)
         try:
             _models = await horde.get_enriched_models()
-            _new_model = await model_router.resolve(body.model, _models, config=config, exclude_model=_current_real_model)
-            if _new_model != _current_real_model:
+            _new_model = await model_router.resolve(
+                body.model, _models, config=config, exclude_models=_tried_models
+            )
+            if _new_model not in _tried_models:
                 _current_real_model = _new_model
                 _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
-        except Exception:
-            pass
+            else:
+                raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}")
+        except HordeNoModelsRemainingError:
+            raise
+        except Exception as e:
+            raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}") from e
 
     try:
         async with _sem:
@@ -66,7 +86,7 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
                 backoff_base=config.retry.backoff_base,
                 on_broaden=_on_broaden,
             )
-    except HordeTimeoutError as e:
+    except (HordeTimeoutError, HordeNoModelsRemainingError) as e:
         request.state.log_extras = {
             "model": body.model,
             "real_model": _current_real_model,

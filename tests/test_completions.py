@@ -80,3 +80,118 @@ async def test_completions_model_in_response(client):
     )
     assert response.status_code == 200
     assert response.json()["model"] == "best"
+
+
+async def test_completions_is_possible_false_emits_ban_log(app, client, respx_mock):
+    """is_possible=False with count=0 in completions emits a 'ban' entry to request_log."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # Single model with count=0 so cached_model_count() returns 0 (truly offline)
+    zero_models = [{"name": target_model, "count": 0, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=zero_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": RetrySettings(max_retries=0, timeout_seconds=1, broaden_on_retry=False, backoff_base=0.0, poll_interval=0.0)}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    # Direct model name: resolve() accepts it via name-match even with count=0
+    await client.post(
+        "/v1/completions",
+        json={"model": target_model, "prompt": "Hello"},
+    )
+
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) >= 1
+    assert ban_entries[0].real_model != ""
+    assert "banned" in ban_entries[0].error.lower() or "unavailable" in ban_entries[0].error.lower()
+
+
+async def test_completions_is_possible_false_transient_no_ban(app, client, respx_mock):
+    """is_possible=False with count>0 in completions does NOT ban the model."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 2.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    # Single model with count=5 — is_possible=False is transient, should NOT ban
+    live_models = [{"name": target_model, "count": 5, "queued": 0, "jobs": 0.0, "eta": 0, "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=live_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": RetrySettings(max_retries=0, timeout_seconds=1, broaden_on_retry=False,
+                                       backoff_base=0.0, poll_interval=0.0,
+                                       unavailable_max_transient_retries=0)}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    await client.post(
+        "/v1/completions",
+        json={"model": target_model, "prompt": "Hello"},
+    )
+
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) == 0, "Model with workers should not be banned when transient retries disabled"
+
+
+async def test_completions_count_positive_exhausted_no_ban(app, client, respx_mock):
+    """completions: count>0 but transient budget exhausted → NO ban, 504 returned."""
+    impossible = {
+        "done": False, "faulted": False, "processing": 0, "waiting": 1,
+        "finished": 0, "queue_position": 0, "wait_time": 0, "kudos": 0.0,
+        "generations": [], "is_possible": False,
+    }
+    target_model = "aphrodite/llama-3.1-8b-instruct"
+    live_models = [{"name": target_model, "count": 5, "queued": 0, "jobs": 0.0, "eta": 0,
+                    "max_length": 512, "max_context_length": 8192, "performance": "", "type": "text"}]
+    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
+        return_value=httpx.Response(200, json=live_models)
+    )
+    respx_mock.get("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json=impossible)
+    )
+    respx_mock.delete("https://aihorde.net/api/v2/generate/text/status/test-job-id").mock(
+        return_value=httpx.Response(200, json={"message": "Cancelled"})
+    )
+    app.state.config = app.state.config.model_copy(
+        update={"retry": RetrySettings(
+            max_retries=0, timeout_seconds=1, broaden_on_retry=False,
+            backoff_base=0.0, poll_interval=0.0,
+            unavailable_max_transient_retries=2,
+        )}
+    )
+    app.state.request_log = []
+    app.state.horde.invalidate_model_cache()
+
+    response = await client.post(
+        "/v1/completions",
+        json={"model": target_model, "prompt": "Hello"},
+    )
+
+    assert response.status_code == 504
+    assert len(app.state.horde._banned_models) == 0, (
+        f"Model was wrongly banned: {app.state.horde._banned_models}"
+    )
+    ban_entries = [e for e in app.state.request_log if e.status == "ban"]
+    assert len(ban_entries) == 0, "Model with active workers should not emit a ban log entry"

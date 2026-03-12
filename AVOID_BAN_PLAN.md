@@ -146,28 +146,31 @@ submission rate.
 **Remaining:** TUI dashboard integration to display suspicion count and warn when
 `suspicion >= 4` (one below the hard threshold of 5).
 
-### 6.3 Dashboard visibility of ban/reputation state 🔲
+### 6.3 Dashboard visibility of ban/reputation state ✅
 
-**Gap:** The TUI dashboard currently shows no indication of the proxy's live ban
-or reputation state. Three pieces of runtime state are invisible to the operator:
+**Implemented:** `BanStatusWidget` (`app/tui/widgets/ban_status.py`) is embedded in
+the dashboard's status panel and updated on every `_load_horde_stats()` call.
 
-| Signal | Where it lives | Dashboard gap |
+| Signal | Where it lives | Dashboard display |
 |---|---|---|
-| Account suspicion score | `HordeUser.suspicion` (polled via `get_user()`) | Never shown |
-| Active IP short-circuit | `HordeClient._ip_blocked_until` / `_ip_block_reason` | Never shown |
-| 429 rate-limit cooldown | `HordeClient._rate_limited_until` | Never shown |
+| Account suspicion score | `HordeUser.suspicion` (polled via `get_user()`) | Yellow if 1–4, red if ≥ 5 |
+| Active IP short-circuit | `HordeClient.ip_blocked_until` / `ip_block_reason` | Red with reason + remaining seconds |
+| 429 rate-limit cooldown | `HordeClient.rate_limited_until` | Yellow with remaining seconds |
 
-**What is needed:** A status widget on the dashboard that reads these three values
-on every tick and renders them in a clear, colour-coded way:
+**New public properties added to `HordeClient`:** `ip_blocked_until`, `ip_block_reason`,
+`rate_limited_until` — expose the previously private `_ip_blocked_*` and
+`_rate_limited_until` fields without changing internal logic.
 
-- **Green** — no active blocks, suspicion = 0
-- **Yellow** — suspicion > 0 (show exact score, e.g. `suspicion: 2/5`)
-- **Red** — IP short-circuit active (show reason + remaining seconds),
-  or 429 cooldown active (show remaining seconds)
+**Colour scheme:**
+- All-clear: plain text (`suspicion:0  IP:ok  429:ok`)
+- Warning: yellow markup (`[yellow]suspicion:3[/yellow]`, `[yellow]429:cooldown(4s)[/yellow]`)
+- Block: red markup (`[red]IP:TimeoutIP(1800s)[/red]`, `[red]suspicion:5[/red]`)
 
-This is the most operator-visible gap in the current ban-avoidance suite — an IP
-block or high suspicion score can go completely unnoticed until requests start
-failing. Tracked as **P2** work alongside §9 (`BanMonitor` + `BanStatusWidget`).
+**Files:** `app/tui/widgets/ban_status.py` (new), `app/horde/client.py`,
+`app/tui/screens/dashboard.py`
+
+**Tests:** 6 new tests in `tests/test_tui.py` covering all-clear, suspicion warning,
+IP block, 429 cooldown, and no-client states.
 
 ### 6.2 Adaptive throttling on repeated 429s 🔲
 
@@ -208,7 +211,7 @@ any Horde requests are made.
 | **P3** | Client agent validation | ✅ Done | `test_client_agent_*` (4 tests) |
 | **P3** | Prompt pre-screening | 🔲 Not started | — |
 | **P3** | Adaptive throttling (6.2) | 🔲 Not started | — |
-| **P2** | Dashboard ban/reputation widget (6.3) | 🔲 Not started | — |
+| **P2** | Dashboard ban/reputation widget (6.3) | ✅ Done | `test_ban_status_widget_*` (6 tests) |
 | **P3** | TUI suspicion display (6.1) | 🔲 Not started | — |
 | **P3** | `BannedClientAgent` / `DeletedUser` fatal handlers | 🔲 Not started | — |
 
