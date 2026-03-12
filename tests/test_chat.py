@@ -20,6 +20,7 @@ def _fast_retry(max_retries=0, timeout_seconds=1):
         timeout_seconds=timeout_seconds,
         broaden_on_retry=False,
         backoff_base=0.0,
+        poll_interval=0.0,
     )
 
 
@@ -300,7 +301,7 @@ async def test_stream_chat_stall_retries_and_succeeds():
     from unittest.mock import AsyncMock, MagicMock
 
     from app.routers.chat import _stream_chat
-    from app.schemas.horde import HordeGeneration, HordeJobStatus
+    from app.schemas.horde import HordeGeneration, HordeJobStatus, HordeModel
 
     pending_status = HordeJobStatus(
         done=False, faulted=False, generations=[], kudos=0,
@@ -354,7 +355,7 @@ async def test_stream_chat_faulted_retries_and_succeeds():
     from unittest.mock import AsyncMock, MagicMock
 
     from app.routers.chat import _stream_chat
-    from app.schemas.horde import HordeGeneration, HordeJobStatus
+    from app.schemas.horde import HordeGeneration, HordeJobStatus, HordeModel
 
     faulted_status = HordeJobStatus(
         done=False, faulted=True, generations=[], kudos=0,
@@ -460,7 +461,7 @@ async def test_stream_chat_retry_delay_applied():
 
     from app.config import RetrySettings, Settings
     from app.routers.chat import _stream_chat
-    from app.schemas.horde import HordeGeneration, HordeJobStatus
+    from app.schemas.horde import HordeGeneration, HordeJobStatus, HordeModel
 
     faulted = HordeJobStatus(done=False, faulted=True, generations=[], kudos=0)
     done = HordeJobStatus(
@@ -497,7 +498,7 @@ async def test_stream_chat_impossible_fallback_to_new_model():
     from unittest.mock import AsyncMock, AsyncMock as AM, MagicMock
 
     from app.routers.chat import _stream_chat
-    from app.schemas.horde import HordeGeneration, HordeJobStatus
+    from app.schemas.horde import HordeGeneration, HordeJobStatus, HordeModel
 
     impossible = HordeJobStatus(done=False, faulted=False, is_possible=False, generations=[], kudos=0)
     done_status = HordeJobStatus(
@@ -511,14 +512,17 @@ async def test_stream_chat_impossible_fallback_to_new_model():
     horde.poll_text_status = AsyncMock(side_effect=[impossible, done_status])
     horde.cancel_text_job = AsyncMock()
     horde.ban_model = MagicMock()
-    horde.get_enriched_models = AsyncMock(return_value=[])
+    horde.get_enriched_models = AsyncMock(return_value=[
+        HordeModel(name="old-model", count=0),
+        HordeModel(name="new-model", count=1, eta=0, queued=0),
+    ])
 
-    # Model router that returns a different model on second call
+    # Model router that returns a different model on second call (fallback)
     resolve_calls = []
-    async def _resolve(alias, models, config=None):
-        resolve_calls.append(alias)
-        if len(resolve_calls) == 1:
-            return "new-model"
+    async def _resolve(alias, models, config=None, exclude_model=None):
+        resolve_calls.append(exclude_model)
+        if not exclude_model:
+            return "old-model"
         return "new-model"
     model_router = MagicMock()
     model_router.resolve = _resolve

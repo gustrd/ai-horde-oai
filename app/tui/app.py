@@ -96,7 +96,8 @@ class HordeApp(App):
         from app.main import create_app
 
         fastapi_app = create_app(self.config)
-        # Share the TUI's request_log and notify callback with the FastAPI app
+        # Share the TUI's HordeClient (for shared bans/cooldowns) and request_log
+        fastapi_app.state.horde = self.horde
         fastapi_app.state.request_log = self.request_log
         fastapi_app.state.log_callback = self._notify_logs
         fastapi_app.state.start_callback = self._notify_request_start

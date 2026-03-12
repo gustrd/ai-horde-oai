@@ -40,12 +40,23 @@ class ModelRouter:
 
         return min(candidates, key=lambda m: (m.eta, m.queued)).name
 
-    async def resolve(self, alias: str, models: list[HordeModel], config: Settings | None = None) -> str:
+    async def resolve(
+        self, 
+        alias: str, 
+        models: list[HordeModel], 
+        config: Settings | None = None,
+        exclude_model: str | None = None,
+    ) -> str:
         """Resolve a dummy alias to a real Horde model name.
 
         config: use this instead of self.config (allows per-request config).
+        exclude_model: do not pick this specific model (fallback to another candidate).
         """
         cfg = config if config is not None else self.config
+        
+        # Filter out the model we're explicitly trying to avoid
+        if exclude_model:
+            models = [m for m in models if m.name != exclude_model]
 
         if alias == "best":
             return self._pick_best(models, cfg)
@@ -62,7 +73,19 @@ class ModelRouter:
                 return cfg.default_model
             return self._pick_fast(models, cfg)
 
-        # Unknown alias — pass through as-is (may be a direct Horde model name)
+        # Direct model name check
+        if any(m.name == alias for m in models):
+            return alias
+            
+        # If the requested specific model is banned/unavailable, fallback to "fast" 
+        # instead of failing, provided it's an online worker list.
+        if models:
+            try:
+                fallback = self._pick_fast(models, cfg)
+                return fallback
+            except ModelNotFoundError:
+                pass
+
         return alias
 
     def reverse(self, real_name: str) -> str:

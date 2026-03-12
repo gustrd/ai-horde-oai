@@ -47,7 +47,7 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
         horde.ban_model(_current_real_model, duration=3600.0)
         try:
             _models = await horde.get_enriched_models()
-            _new_model = await model_router.resolve(body.model, _models, config=config)
+            _new_model = await model_router.resolve(body.model, _models, config=config, exclude_model=_current_real_model)
             if _new_model != _current_real_model:
                 _current_real_model = _new_model
                 _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})

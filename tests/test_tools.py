@@ -526,6 +526,7 @@ async def hermes_client(hermes_app):
         api_key=config.horde_api_key,
         client_agent=config.client_agent,
         model_cache_ttl=config.model_cache_ttl,
+        global_min_request_delay=0,
     )
     hermes_app.state.horde = horde
     hermes_app.state.model_router = ModelRouter(config)

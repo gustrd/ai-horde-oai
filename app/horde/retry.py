@@ -100,7 +100,7 @@ async def with_retry(
             # which we retry after exactly 2 seconds (DEFAULT RETRY INTERVAL).
             _was_impossible = is_impossible_retry
             if is_impossible_retry:
-                backoff = 2.0
+                backoff = poll_interval
                 is_impossible_retry = False
             else:
                 backoff = backoff_base * (2 ** (attempts_used - 1))

@@ -58,10 +58,17 @@ async def test_resolve_fast(router):
 
 
 @pytest.mark.asyncio
-async def test_resolve_unknown_passthrough(router):
-    # Unknown alias passes through as-is
-    result = await router.resolve("some-real-horde-model", MODELS)
-    assert result == "some-real-horde-model"
+async def test_resolve_unknown_fallback(router):
+    # Unknown (or offline) models fallback to 'fast' if workers are available
+    result = await router.resolve("offline-or-unknown-model", MODELS)
+    assert result == "koboldcpp/mistral-nemo-12b"
+
+@pytest.mark.asyncio
+async def test_resolve_exclude_model(router):
+    # If we exclude the fast model, it should pick the next best
+    result = await router.resolve("fast", MODELS, exclude_model="koboldcpp/mistral-nemo-12b")
+    # Next fast is llama-3.1-8b (queue 2, eta 10) compared to llama-3.1-70b (queue 5, eta 30)
+    assert result == "aphrodite/llama-3.1-8b"
 
 
 def test_reverse_alias(router):

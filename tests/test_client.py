@@ -21,6 +21,7 @@ async def horde_client():
         api_key="test-key",
         client_agent="test/1.0",
         model_cache_ttl=60,
+        global_min_request_delay=0,
     )
     yield client
     await client.close()

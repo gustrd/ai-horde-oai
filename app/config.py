@@ -19,6 +19,7 @@ class RetrySettings(BaseModel):
     backoff_base: float = 2.0  # seconds; doubled each retry attempt
     rate_limit_backoff: float = 5.0   # seconds to freeze submissions after a 429
     streaming_retry_delay: float = 2.0  # seconds between streaming retry attempts
+    poll_interval: float = 2.0         # seconds between status polls
 
 
 class ImageDefaults(BaseModel):

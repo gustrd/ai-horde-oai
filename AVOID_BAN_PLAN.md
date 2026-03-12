@@ -122,13 +122,14 @@ submission rate.
 **Implemented:**
 - `is_possible=False` → `horde.ban_model(real_model, duration=3600.0)` excludes the
   model from future alias resolution for 1 h.
+- **Direct Model Fallback**: If a specific model name is requested directly (not an alias) and it is unavailable, the proxy will now automatically fallback to the "fast" model selection instead of failing, ensuring request continuity.
+- **Shared State**: The `HordeClient` instance is now shared between the TUI and the FastAPI server. This ensures that model bans, 429 cooldowns, and IP blocks are perfectly synchronized and visible in the TUI in real-time.
 - **Availability Retries**: Retries due to model unavailability (`is_possible=False`) 
   do not count towards `max_retries`. The proxy will cycle through fallback models
   indefinitely until a successful submission occurs or all models for the alias 
   are exhausted.
-- **Streaming path:** after banning, attempts to re-resolve the alias against the
-  filtered model list. Yields `x-horde-resolved` chunk and retries with a 2s delay.
-- **Non-streaming path:** after banning, attempts to re-resolve the alias mid-request 
+- **Streaming path:** after banning, attempts to re-resolve the alias (or fallback from a direct name) against the filtered model list. Yields `x-horde-resolved` chunk and retries with a 2s delay.
+- **Non-streaming path:** after banning, attempts to re-resolve/fallback mid-request 
   and retries. 
 
 **Files:** `app/routers/chat.py`, `app/horde/client.py`, `app/horde/retry.py`
@@ -144,6 +145,29 @@ submission rate.
 
 **Remaining:** TUI dashboard integration to display suspicion count and warn when
 `suspicion >= 4` (one below the hard threshold of 5).
+
+### 6.3 Dashboard visibility of ban/reputation state 🔲
+
+**Gap:** The TUI dashboard currently shows no indication of the proxy's live ban
+or reputation state. Three pieces of runtime state are invisible to the operator:
+
+| Signal | Where it lives | Dashboard gap |
+|---|---|---|
+| Account suspicion score | `HordeUser.suspicion` (polled via `get_user()`) | Never shown |
+| Active IP short-circuit | `HordeClient._ip_blocked_until` / `_ip_block_reason` | Never shown |
+| 429 rate-limit cooldown | `HordeClient._rate_limited_until` | Never shown |
+
+**What is needed:** A status widget on the dashboard that reads these three values
+on every tick and renders them in a clear, colour-coded way:
+
+- **Green** — no active blocks, suspicion = 0
+- **Yellow** — suspicion > 0 (show exact score, e.g. `suspicion: 2/5`)
+- **Red** — IP short-circuit active (show reason + remaining seconds),
+  or 429 cooldown active (show remaining seconds)
+
+This is the most operator-visible gap in the current ban-avoidance suite — an IP
+block or high suspicion score can go completely unnoticed until requests start
+failing. Tracked as **P2** work alongside §9 (`BanMonitor` + `BanStatusWidget`).
 
 ### 6.2 Adaptive throttling on repeated 429s 🔲
 
@@ -184,10 +208,11 @@ any Horde requests are made.
 | **P3** | Client agent validation | ✅ Done | `test_client_agent_*` (4 tests) |
 | **P3** | Prompt pre-screening | 🔲 Not started | — |
 | **P3** | Adaptive throttling (6.2) | 🔲 Not started | — |
+| **P2** | Dashboard ban/reputation widget (6.3) | 🔲 Not started | — |
 | **P3** | TUI suspicion display (6.1) | 🔲 Not started | — |
 | **P3** | `BannedClientAgent` / `DeletedUser` fatal handlers | 🔲 Not started | — |
 
-**Total new tests added:** 28 · **Total suite:** 309 passing, 1 skipped
+**Total new tests added:** 28 · **Total suite:** 306 passing, 1 skipped
 
 ---
 
@@ -325,8 +350,9 @@ retry:
   timeout_seconds: 300
   broaden_on_retry: true
   backoff_base: 2.0
-  rate_limit_backoff: 5.0       # NEW: seconds to freeze after a 429
-  streaming_retry_delay: 2.0    # NEW: seconds between streaming retry attempts
+  rate_limit_backoff: 5.0       # seconds to freeze after a 429
+  streaming_retry_delay: 2.0    # seconds between streaming retry attempts
+  poll_interval: 2.0            # seconds between job status polls (also used for impossible-model retry delay)
 
 global_min_request_delay: 2.0   # absolute minimum seconds between ANY two API hits
 client_agent: "ai-horde-oai:0.1:github"   # validated at startup

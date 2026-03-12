@@ -12,7 +12,7 @@ after `update_cell_at`, or use a column key instead of coordinate index.
 
 ---
 
-**Date:** 2026-03-10 (updated)
+**Date:** 2026-03-11 (updated)
 **Reviewer:** Claude Opus 4.6
 **Overall Quality:** 8/10 — clean architecture, good async patterns, solid test coverage
 
@@ -157,7 +157,31 @@ Some models (e.g. Qwen3.5-27B via koboldcpp) emit a second `<tool_call>` opening
 
 ### 30. Robust Model Unavailability Retries — FIXED
 **Files:** `app/horde/retry.py`, `app/routers/chat.py`
-Retries triggered by `is_possible=False` now bypass the `max_retries` configuration, cycling through all available model fallbacks (with a 2s delay and automatic model banning) until a request succeeds or fallback models are exhausted.
+Retries triggered by `is_possible=False` now bypass the `max_retries` configuration, cycling through all available model fallbacks (with a configurable `poll_interval` delay and automatic model banning) until a request succeeds or fallback models are exhausted.
+
+### 31. `poll_interval` config field — FIXED
+**File:** `app/config.py`, `app/horde/retry.py`, `app/routers/chat.py`
+Added `retry.poll_interval: float = 2.0` to `RetrySettings`. Previously the job-status polling interval and the impossible-model retry delay were hardcoded to `2.0`. Now both use this config value, making them tunable without code changes.
+
+### 32. `exclude_model` in `ModelRouter.resolve()` — FIXED
+**File:** `app/horde/routing.py`
+`resolve()` gains an `exclude_model` parameter. When a model is banned as unavailable, the next `resolve()` call explicitly excludes it so the router can't accidentally pick it again (important for direct model names that also appear in the model list). Both `chat.py` and `completions.py` pass `exclude_model=_current_real_model` after a ban.
+
+### 33. Direct model name fallback in `ModelRouter.resolve()` — FIXED
+**File:** `app/horde/routing.py`
+Previously unknown aliases (direct Horde model names) passed through unmodified, which meant a banned/unavailable model would be re-submitted as-is. Now, if the requested name appears in the live model list it's returned directly; if it doesn't (or has been excluded), the router falls back to `_pick_fast()` instead of failing.
+
+### 34. Shared `HordeClient` between TUI and FastAPI — FIXED
+**Files:** `app/tui/app.py`, `app/main.py`
+The TUI's `HordeClient` instance is now injected into `app.state.horde` before the FastAPI lifespan starts. The lifespan detects this pre-injected instance and skips creating its own, so model bans, 429 cooldowns, and IP blocks are perfectly shared between the TUI and the HTTP server.
+
+### 35. Raw response text in log detail — FIXED
+**Files:** `app/routers/chat.py`, `app/tui/screens/logs.py`
+For tool-call responses the log detail modal now shows both the parsed JSON tool call (labelled "Response (Enhanced)") and the raw AI output (labelled "Raw Response (AI output)"). The `raw_response_text` field is captured in `request.state.log_extras` and forwarded to `RequestLogEntry`.
+
+### 36. Log clear persists to disk — FIXED
+**File:** `app/tui/screens/logs.py`
+`action_clear()` now calls `save_entries()` after clearing `app.request_log`, so the JSONL log file is truncated immediately rather than retaining stale entries until the next write.
 
 ---
 
@@ -186,21 +210,27 @@ Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/tem
 
 | Test File | Tests | Coverage |
 |---|---|---|
-| `test_chat.py` | 11 | Chat endpoint: basic, aliases, system msg, 401, 500→502, 404, timeout, faulted, streaming, worker comment, actual model |
-| `test_completions.py` | 6 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
-| `test_images.py` | 7 | Images: url/b64/default format, submit error, timeout, faulted, timestamp |
-| `test_models.py` | 5 | Models list: fields, get found/not found, real names hidden |
-| `test_routing.py` | 12 | Routing: best/fast/default/alias/passthrough, blocklist, fallback, config passing |
+| `test_chat.py` | 35 | Chat endpoint: basic, aliases, system msg, 401, 500→502, 404, timeout, faulted, streaming, worker comment, IP blocks, corrupt prompt, rate limit cooldown, streaming retry delay, impossible model fallback |
+| `test_tools.py` | 39 | Tool/function calling: hermes, llama3, format detection, streaming, retry on bad format |
+| `test_retry.py` | 22 | Retry: success, image, faulted, timeout, retries, backoff, corrupt prompt, IP block, check_ip_block, cancelled error |
+| `test_routing.py` | 19 | Routing: best/fast/default/alias/fallback, blocklist, exclude_model, config passing |
+| `test_model_table.py` | 19 | ModelTable: text filter, settings filters, wrapping, screen integration |
+| `test_tui.py` | 27 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history |
+| `test_unified_log_tui.py` | 16 | Log viewer: table display, detail modal, checked flag, filtering |
+| `test_e2e.py` | 16 | End-to-end integration |
+| `test_config.py` | 14 | Config: load/save/env overrides, client_agent validation, retry fields, suspicion |
+| `test_client.py` | 11 | Client: models, caching, invalidation, errors, cancel, user, rate limiting |
+| `test_translate.py` | 10 | OpenAI ↔ Horde translation |
+| `test_log_middleware.py` | 10 | Request logging middleware |
+| `test_log_store.py` | 16 | Log store: entry fields, JSONL persistence |
 | `test_filters.py` | 9 | Model/worker filtering |
-| `test_translate.py` | 11 | OpenAI ↔ Horde translation |
-| `test_retry.py` | 9 | Retry: success, image, faulted, timeout, retries, backoff, on_status, empty gens |
-| `test_client.py` | 8 | Client: models, caching, invalidation, errors, cancel, user |
-| `test_config.py` | 5 | Config: load/save/env overrides |
-| `test_tui.py` | ~35 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history |
-| `test_model_table.py` | ~18 | ModelTable: text filter, settings filters, wrapping, screen integration |
-| `test_e2e.py` | 20 | End-to-end integration |
+| `test_api.py` | 9 | API: completions, images, models |
+| `test_templates.py` | 7 | Chat templates: hermes, llama3, detection |
+| `test_images.py` | 7 | Images: url/b64/default format, submit error, timeout, faulted, timestamp |
+| `test_completions.py` | 6 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
+| `test_models.py` | 5 | Models list: fields, get found/not found, real names hidden |
 
-**Total: ~156 tests**
+**Total: 306 passing, 1 skipped**
 
 ---
 

@@ -27,6 +27,7 @@ def _make_app(config: Settings, request_log: list | None = None) -> tuple:
         base_url=config.horde_api_url,
         api_key=config.horde_api_key,
         client_agent=config.client_agent,
+        global_min_request_delay=0,
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)

@@ -42,7 +42,7 @@ def test_config(tmp_path) -> Settings:
         default_model="aphrodite/llama-3.1-8b-instruct",
         model_aliases={"large": "aphrodite/llama-3.1-70b-instruct"},
         model_blocklist=["yi"],
-        retry={"max_retries": 1, "timeout_seconds": 10, "broaden_on_retry": False},
+        retry={"max_retries": 1, "timeout_seconds": 10, "broaden_on_retry": False, "poll_interval": 0, "backoff_base": 0, "streaming_retry_delay": 0},
     )
 
 
@@ -91,6 +91,7 @@ async def client(app):
         api_key=config.horde_api_key,
         client_agent=config.client_agent,
         model_cache_ttl=config.model_cache_ttl,
+        global_min_request_delay=0,  # disable throttle for tests
     )
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)

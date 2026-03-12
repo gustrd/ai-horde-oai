@@ -151,6 +151,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     gen = None
     response_text = ""
     reasoning_content: str | None = None
+    raw_response_for_logs = ""
+    error_msg = ""
     tool_call: ToolCall | None = None
     _tool_info = ""
     _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
@@ -168,7 +170,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         horde.ban_model(_current_real_model, duration=3600.0)
         try:
             _models = await horde.get_enriched_models()
-            _new_model = await model_router.resolve(body.model, _models, config=config)
+            _new_model = await model_router.resolve(body.model, _models, config=config, exclude_model=_current_real_model)
             if _new_model != _current_real_model:
                 logger.info("re-resolved %r -> %r after failure", body.model, _new_model)
                 _current_real_model = _new_model
@@ -198,6 +200,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                     timeout_seconds=config.retry.timeout_seconds,
                     broaden_on_retry=config.retry.broaden_on_retry,
                     backoff_base=config.retry.backoff_base,
+                    poll_interval=config.retry.poll_interval,
                     on_broaden=_on_broaden,
                     on_submit=_on_submit,
                 )
@@ -260,10 +263,19 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                 _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, raw_len, _worker,
             )
             if _attempt < _TOOL_FORMAT_MAX_RETRIES:
-                _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
-                           log_messages, input_tokens, _attempt_dur, "empty response",
-                           tool_info=f"raw_len={raw_len} worker={_worker}",
-                           response_text=gen.text if gen else "")
+                _log_retry(
+                    request=request,
+                    model=body.model,
+                    real_model=real_model,
+                    gen=gen,
+                    kudos=status.kudos or 0.0,
+                    log_messages=log_messages,
+                    input_tokens=input_tokens,
+                    duration=_attempt_dur,
+                    reason="empty response",
+                    tool_info=f"raw_len={raw_len} worker={_worker}",
+                    response_text=gen.text if gen else "",
+                )
                 continue
             response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {raw_len} chars]"
 
@@ -288,15 +300,30 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                     _attempt + 1, 1 + _TOOL_FORMAT_MAX_RETRIES, fmt, _snippet,
                 )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
-                    _log_retry(request, body.model, real_model, gen, status.kudos or 0.0,
-                               log_messages, input_tokens, _attempt_dur, "tool call invalid format",
-                               tool_info=_tool_info, response_text=response_text)
+                    _log_retry(
+                        request=request,
+                        model=body.model,
+                        real_model=real_model,
+                        gen=gen,
+                        kudos=status.kudos or 0.0,
+                        log_messages=log_messages,
+                        input_tokens=input_tokens,
+                        duration=_attempt_dur,
+                        reason="tool call invalid format",
+                        tool_info=_tool_info,
+                        response_text=response_text,
+                    )
                     continue
                 response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
             else:
                 _tool_info = f"not detected: plain text response (fmt={fmt})"
                 logger.info("tool call not detected: treating as text fmt=%s response=%r", fmt, _snippet)
         break
+
+    raw_res = response_text
+    if tool_call:
+        # For logging, also capture the JSON we're about to send
+        response_text = json.dumps(tool_call.model_dump(), indent=2)
 
     request.state.log_extras = {
         "model": body.model,
@@ -306,6 +333,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         "worker_id": gen.worker_id or "" if gen else "",
         "kudos": status.kudos or 0.0,
         "response_text": response_text,
+        "raw_response_text": raw_res if tool_call else "",
         "input_tokens": input_tokens,
         "output_tokens": estimate_tokens(response_text),
         "reasoning_content": reasoning_content or "",
@@ -353,6 +381,7 @@ async def _stream_chat(
     kudos = 0.0
     response_text = ""
     reasoning_content: str | None = None
+    raw_response_for_logs = ""
     status_code: int | str = 200
     error_msg = ""
     _tool_info = ""
@@ -464,7 +493,7 @@ async def _stream_chat(
                             if refresh_cb:
                                 refresh_cb()
 
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(config.retry.poll_interval if config else 2.0)
 
             if _abort_reason == "impossible":
                 # Try re-resolving the alias against the now-filtered model list (P1-C)
@@ -472,7 +501,8 @@ async def _stream_chat(
                 if model_router is not None:
                     try:
                         _fb_models = await horde.get_enriched_models()
-                        _fallback_model = await model_router.resolve(alias, _fb_models, config=config)
+                        # Pass real_model as exclude so we don't pick it again if it was a direct name
+                        _fallback_model = await model_router.resolve(alias, _fb_models, config=config, exclude_model=real_model)
                     except Exception:
                         _fallback_model = None
                 if _fallback_model and _fallback_model != real_model:
@@ -480,10 +510,10 @@ async def _stream_chat(
                     horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
                     # Delay before retry (DEFAULT RETRY INTERVAL)
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(config.retry.poll_interval if config else 2.0)
                     continue  # retry with new model without incrementing _attempt
                 # No fallback available — fail with clear message
-                response_text = f"[MODEL_UNAVAILABLE: {real_model} has no active workers on AI Horde]"
+                response_text = "[MODEL_UNAVAILABLE: no valid active workers on AI Horde]"
                 status_code = "unav."
                 reasoning_content = None
                 actual_model = real_model
@@ -515,9 +545,19 @@ async def _stream_chat(
                 )
                 if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                     if request is not None and gen is not None:
-                        _log_retry(request, alias, real_model, gen, kudos,
-                                   tool_info=f"raw_len={raw_len} worker={worker_name}",
-                                   response_text=gen.text)
+                        _log_retry(
+                            request=request,
+                            model=alias,
+                            real_model=real_model,
+                            gen=gen,
+                            kudos=kudos,
+                            log_messages=log_messages,
+                            input_tokens=_stream_input_tokens,
+                            duration=_attempt_dur,
+                            reason="empty response",
+                            tool_info=f"raw_len={raw_len} worker={worker_name}",
+                            response_text=gen.text,
+                        )
                     _attempt += 1
                     continue
                 response_text = f"[GENERATION_FAILURE: empty response after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts, last response {raw_len} chars]"
@@ -541,9 +581,19 @@ async def _stream_chat(
                     )
                     if _attempt < _TOOL_FORMAT_MAX_RETRIES:
                         if request is not None and gen is not None:
-                            _log_retry(request, alias, real_model, gen, kudos,
-                                       log_messages, _stream_input_tokens, _attempt_dur, "tool call invalid format",
-                                       tool_info=_tool_info, response_text=response_text)
+                            _log_retry(
+                                request=request,
+                                model=alias,
+                                real_model=real_model,
+                                gen=gen,
+                                kudos=kudos,
+                                log_messages=log_messages,
+                                input_tokens=_stream_input_tokens,
+                                duration=_attempt_dur,
+                                reason="tool call invalid format",
+                                tool_info=_tool_info,
+                                response_text=response_text,
+                            )
                         _attempt += 1
                         continue
                     response_text = f"[GENERATION_FAILURE: tool call invalid format after {1 + _TOOL_FORMAT_MAX_RETRIES} attempts | {_snippet}]"
@@ -558,6 +608,10 @@ async def _stream_chat(
 
         if tool_call:
             status_code = "tool"
+            raw_response_for_logs = response_text
+            # For logging, also capture the JSON we're about to send
+            response_text = json.dumps(tool_call.model_dump(), indent=2)
+
             # Emit tool_calls delta chunks (OpenClaw / OpenAI streaming protocol)
             # Chunk 1: tool name with empty arguments
             yield (
@@ -669,6 +723,7 @@ async def _stream_chat(
                     reasoning_tokens=estimate_tokens(reasoning_content or ""),
                     tool_info=_tool_info,
                     job_id=job_id or "",
+                    raw_response_text=raw_response_for_logs,
                 )
                 request_log = getattr(request.app.state, "request_log", None)
                 if request_log is not None:

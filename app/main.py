@@ -24,20 +24,28 @@ logger = logging.getLogger("ai-horde-oai")
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     config: Settings = app.state.config
-    horde = HordeClient(
-        base_url=config.horde_api_url,
-        api_key=config.horde_api_key,
-        client_agent=config.client_agent,
-        model_cache_ttl=config.model_cache_ttl,
-        rate_limit_backoff=config.retry.rate_limit_backoff,
-        global_min_request_delay=config.global_min_request_delay,
-    )
-    app.state.horde = horde
+    
+    # Allow the TUI app to inject its own HordeClient instance so bans/cooldowns are shared
+    horde = getattr(app.state, "horde", None)
+    should_close = False
+    if horde is None:
+        horde = HordeClient(
+            base_url=config.horde_api_url,
+            api_key=config.horde_api_key,
+            client_agent=config.client_agent,
+            model_cache_ttl=config.model_cache_ttl,
+            rate_limit_backoff=config.retry.rate_limit_backoff,
+            global_min_request_delay=config.global_min_request_delay,
+        )
+        app.state.horde = horde
+        should_close = True
+
     app.state.model_router = ModelRouter(config)
     n = config.max_concurrent_requests
     app.state.horde_semaphore = _asyncio.Semaphore(n) if n > 0 else None
     yield
-    await horde.close()
+    if should_close:
+        await horde.close()
 
 
 def create_app(config: Settings | None = None) -> FastAPI:
@@ -147,6 +155,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
                         reasoning_tokens=extras.get("reasoning_tokens", 0),
                         tool_info=extras.get("tool_info", ""),
                         job_id=extras.get("job_id", ""),
+                        raw_response_text=extras.get("raw_response_text", ""),
                     )
                     request_log = getattr(request.app.state, "request_log", None)
                     if request_log is not None:

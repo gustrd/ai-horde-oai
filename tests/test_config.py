@@ -20,7 +20,8 @@ def test_default_settings():
     assert s.retry.timeout_seconds == 300
     assert s.retry.rate_limit_backoff == 5.0
     assert s.retry.streaming_retry_delay == 2.0
-    assert s.max_requests_per_second == 1.0
+    assert s.retry.poll_interval == 2.0
+    assert s.global_min_request_delay == 2.0
 
 
 # ── Client agent validation (P3) ─────────────────────────────────────────────
@@ -62,6 +63,7 @@ def test_retry_settings_new_fields():
     r = RetrySettings()
     assert r.rate_limit_backoff == 5.0
     assert r.streaming_retry_delay == 2.0
+    assert r.poll_interval == 2.0
 
 
 def test_retry_settings_custom_values():

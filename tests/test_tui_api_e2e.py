@@ -26,6 +26,7 @@ async def test_tui_to_api_chat_flow(test_config, respx_mock, tmp_path):
         base_url=server_config.horde_api_url,
         api_key=server_config.horde_api_key,
         client_agent=server_config.client_agent,
+        global_min_request_delay=0,
     )
     proxy_app.state.horde = horde_client
     proxy_app.state.model_router = ModelRouter(server_config)

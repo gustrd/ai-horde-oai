@@ -293,7 +293,7 @@ def test_check_ip_block_not_blocked():
         base_url="https://aihorde.net/api",
         api_key="test",
         client_agent="test:0.1:test",
-        max_requests_per_second=0.0,
+        global_min_request_delay=0.0,
     )
     horde.check_ip_block()  # should not raise
 
@@ -306,7 +306,7 @@ def test_check_ip_block_timeout_ip():
         base_url="https://aihorde.net/api",
         api_key="test",
         client_agent="test:0.1:test",
-        max_requests_per_second=0.0,
+        global_min_request_delay=0.0,
     )
     horde._ip_blocked_until = time.monotonic() + 3600.0
     horde._ip_block_reason = "TimeoutIP"
@@ -322,7 +322,7 @@ def test_check_ip_block_unsafe_ip():
         base_url="https://aihorde.net/api",
         api_key="test",
         client_agent="test:0.1:test",
-        max_requests_per_second=0.0,
+        global_min_request_delay=0.0,
     )
     horde._ip_blocked_until = time.monotonic() + 21600.0
     horde._ip_block_reason = "UnsafeIP"
@@ -338,7 +338,7 @@ def test_check_ip_block_expired():
         base_url="https://aihorde.net/api",
         api_key="test",
         client_agent="test:0.1:test",
-        max_requests_per_second=0.0,
+        global_min_request_delay=0.0,
     )
     horde._ip_blocked_until = time.monotonic() - 1.0  # already expired
     horde._ip_block_reason = "TimeoutIP"
@@ -346,50 +346,6 @@ def test_check_ip_block_expired():
     horde.check_ip_block()  # should not raise
 
 
-async def test_token_bucket_unlimited_when_rate_zero():
-    """_TokenBucket with rate=0 never sleeps."""
-    from app.horde.client import _TokenBucket
-    bucket = _TokenBucket(rate=0.0)
-    sleep_calls = []
-
-    async def _fake_sleep(t):
-        sleep_calls.append(t)
-
-    import unittest.mock
-    with unittest.mock.patch("app.horde.client.asyncio.sleep", side_effect=_fake_sleep):
-        for _ in range(5):
-            await bucket.acquire()
-
-    assert sleep_calls == []  # no rate limiting when rate=0
-
-
-async def test_token_bucket_high_rate_no_sleep():
-    """_TokenBucket with high rate doesn't sleep on first acquisition."""
-    from app.horde.client import _TokenBucket
-    bucket = _TokenBucket(rate=1000.0)
-    sleep_calls = []
-
-    async def _fake_sleep(t):
-        sleep_calls.append(t)
-
-    import unittest.mock
-    with unittest.mock.patch("app.horde.client.asyncio.sleep", side_effect=_fake_sleep):
-        await bucket.acquire()
-
-    assert sleep_calls == []  # first token is immediately available
-
-
-async def test_horde_client_has_rate_limiter():
-    """HordeClient initializes with a token bucket rate limiter."""
-    horde = HordeClient(
-        base_url="https://aihorde.net/api",
-        api_key="test",
-        client_agent="test:0.1:test",
-        max_requests_per_second=2.0,
-    )
-    from app.horde.client import _TokenBucket
-    assert isinstance(horde._rate_limiter, _TokenBucket)
-    await horde.close()
 
 
 async def test_cancelled_error_cancels_job_and_reraises():

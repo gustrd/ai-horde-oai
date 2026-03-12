@@ -45,6 +45,12 @@ max_concurrent_requests: 3   # max simultaneous Horde jobs; 0 = unlimited
 retry:
   max_retries: 2
   timeout_seconds: 300
+  poll_interval: 2.0      # seconds between job status polls (and between impossible-model retries)
+  rate_limit_backoff: 5.0 # seconds to freeze after a 429 response
+  streaming_retry_delay: 2.0  # seconds between streaming retry attempts
+
+global_min_request_delay: 2.0  # minimum seconds between any two Horde API calls
+client_agent: "ai-horde-oai:0.1:github"  # must follow <name>:<version>:<contact> format
 ```
 
 Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`.
@@ -82,11 +88,14 @@ OpenAI-style `tools` and `tool_choice` are supported. Tools are injected into th
 
 The proxy implements sophisticated retry logic to ensure high reliability despite Horde's distributed nature:
 
-- **Unavailable Models**: If Horde reports `is_possible=False` (no active workers for the model), the proxy automatically bans that specific model locally for **1 hour**, enforcing a 2-second delay, and automatically fallbacks to the next best model for the requested alias. This retry loop **bypasses standard retry limits** and continues until a suitable model is found and successfully finishes a job, or until all models for that alias have been exhausted.
-- **Exponential Backoff**: Normal job failures (faults, timeouts) use exponential backoff (`2s, 4s, 8s...`).
-- **Streaming Resilience**: Streaming connections track progress; if a job stalls (no queue change), it is automatically cancelled and retried.
+- **Unavailable Models**: If Horde reports `is_possible=False` (no active workers for the model), the proxy automatically bans that specific model locally for **1 hour** and re-resolves the alias against the remaining model list — explicitly excluding the just-banned model. This retry loop bypasses `max_retries` and continues until a working model is found or the alias is exhausted.
+- **Exponential Backoff**: Normal job failures (faults, timeouts) use exponential backoff (`2s, 4s, 8s...` based on `backoff_base`).
+- **Streaming Resilience**: Streaming connections track progress; if a job stalls (no queue position change within `stream_stall_timeout` seconds), it is automatically cancelled and retried.
 - **Tool Formatting**: Malformed tool-call responses are automatically retried up to 3 times.
-- **Global Request Delay**: To prevent account flags due to concurrent burst traffic, the proxy enforces an absolute minimum delay (default: **2.0s**) between any two hits to the Horde API across all clients and models.
+- **Global Request Delay**: An absolute minimum delay (default: **2.0s**, `global_min_request_delay`) between any two Horde API calls prevents burst traffic that could trigger rate limits or suspicion.
+- **Rate Limit Cooldown**: A 429 response records a local cooldown (`rate_limit_backoff`, default 5 s); all subsequent submissions wait it out transparently before hitting Horde again.
+- **IP Block Short-Circuit**: On `rc=TimeoutIP` or `rc=UnsafeIP`, the proxy records a local block (1 h / 6 h respectively) and rejects all further submissions immediately — no Horde calls while blocked.
+- **Shared Client State**: The TUI and the FastAPI server share a single `HordeClient` instance, so model bans, 429 cooldowns, and IP blocks are visible and enforced across both.
 
 ## Docker
 

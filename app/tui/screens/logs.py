@@ -95,8 +95,14 @@ class LogDetailModal(ModalScreen):
                 lines.append(f"  {chunk}")
 
         if e.response_text:
-            lines += ["", "── Response ────────────────────────────────"]
+            title = "Response (Enhanced)" if e.raw_response_text else "Response"
+            lines += ["", f"── {title} ────────────────────────────────"]
             for chunk in textwrap.wrap(e.response_text, 76):
+                lines.append(f"  {chunk}")
+
+        if e.raw_response_text:
+            lines += ["", "── Raw Response (AI output) ────────────────"]
+            for chunk in textwrap.wrap(e.raw_response_text, 76):
                 lines.append(f"  {chunk}")
 
         if e.prompt:
@@ -372,5 +378,6 @@ class LogsScreen(Screen):
 
     def action_clear(self) -> None:
         self.app.request_log.clear()
+        save_entries(self.app.request_log)
         self.query_one(DataTable).clear()
         self.query_one("#info", Label).update("No requests yet.")
