@@ -183,6 +183,14 @@ Added `BanStatusWidget` to the dashboard status panel showing three live ban sig
 
 ## Suggestions for Enhancement
 
+### [PENDING] `format_tool_result` always emits chatml-style format — OPEN
+**File:** `app/horde/chat_templates.py:130-136`
+`format_tool_result` always emits `<|im_start|>tool` / `<|im_end|>` (chatml) for all non-llama3 templates (kobold, alpaca, mistral). Low impact while those models lack tool support, but needs per-template handling when they gain it.
+
+---
+
+## Suggestions for Enhancement (pre-existing)
+
 ### A. `/v1/embeddings` stub — OPEN
 Return clear "not supported" error instead of 404.
 

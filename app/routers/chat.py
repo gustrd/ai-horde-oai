@@ -169,6 +169,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                 max_retries=config.retry.max_retries,
                 model_router=model_router,
                 config=config,
+                body=body,
             ),
             media_type="text/event-stream",
         )
@@ -215,13 +216,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
                 body.model, _models, config=config, exclude_models=_tried_models_ns
             )
             if _new_model not in _tried_models_ns:
-                logger.info("re-resolved %r -> %r after failure", body.model, _new_model)
+                logger.info("re-resolved %r -> %r after failure (re-rendering prompt)", body.model, _new_model)
                 _current_real_model = _new_model
                 _new_info = next((m for m in _models if m.name == _new_model), None)
-                if _new_info:
-                    _current_horde_req = cap_params_to_model(_current_horde_req, _new_info)
-                else:
-                    _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+                # FULL re-render of the prompt using the new model's template
+                _current_horde_req = chat_to_horde(body, _current_real_model, config, model_info=_new_info)
             else:
                 raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}")
         except HordeNoModelsRemainingError:
@@ -411,6 +410,7 @@ async def _stream_chat(
     max_retries: int = 2,
     model_router: ModelRouter | None = None,
     config: Settings | None = None,
+    body: ChatCompletionRequest | None = None,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -582,11 +582,18 @@ async def _stream_chat(
                         _fallback_model = None
                 if _fallback_model and _fallback_model not in _tried_models:
                     real_model = _fallback_model
-                    _new_info = next((m for m in _fb_models if m.name == real_model), None)
-                    if _new_info:
-                        horde_req = cap_params_to_model(horde_req, _new_info)
+                    logger.info("re-resolved %r -> %r after failure", alias, real_model)
+                    _fb_info = next((m for m in _fb_models if m.name == real_model), None)
+                    if body:
+                        # FULL re-render of the prompt using the new model's template
+                        logger.info("re-rendering prompt for %r", real_model)
+                        horde_req = chat_to_horde(body, real_model, config, model_info=_fb_info)
                     else:
-                        horde_req = horde_req.model_copy(update={"models": [real_model]})
+                        # Fallback for tests or code paths without original body: just update model list
+                        if _fb_info:
+                            horde_req = cap_params_to_model(horde_req, _fb_info)
+                        else:
+                            horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
                     # Delay before retry (DEFAULT RETRY INTERVAL)
                     await asyncio.sleep(config.retry.poll_interval if config else 2.0)

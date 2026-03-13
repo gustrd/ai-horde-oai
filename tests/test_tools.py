@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from app.horde.templates import format_tool_result, format_tools_for_model, messages_to_prompt
+from app.horde.chat_templates import format_tool_result, format_tools_for_model, messages_to_prompt
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
 from app.horde.translate import chat_to_horde
 from app.main import create_app

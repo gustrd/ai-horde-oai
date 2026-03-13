@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config import Settings
-from app.horde.templates import messages_to_prompt
+from app.horde.chat_templates import messages_to_prompt
 from app.horde.tool_parser import detect_tool_format
 from app.schemas.horde import (
     HordeModel,

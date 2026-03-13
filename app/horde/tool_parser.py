@@ -10,10 +10,13 @@ from app.schemas.openai import ToolCall, ToolCallFunction
 logger = logging.getLogger(__name__)
 
 
+from app.horde.chat_templates import detect_template_id
+
+
 def detect_tool_format(model_name: str) -> str:
-    """Return 'llama3' or 'hermes' based on model name."""
-    name = model_name.lower()
-    if "llama-3" in name or "llama3" in name:
+    """Return 'llama3' or 'hermes' based on model template."""
+    tid = detect_template_id(model_name)
+    if tid == "llama3":
         return "llama3"
     return "hermes"
 

@@ -9,6 +9,7 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Label
 
+from app.horde.chat_templates import detect_template_id, get_template
 from app.horde.filters import filter_models
 from app.schemas.horde import HordeModel
 
@@ -21,6 +22,7 @@ _COLUMNS: list[tuple[str, callable, bool]] = [
     ("ETA",      lambda m: m.eta,                  True),
     ("T/s",      lambda m: _parse_tps(m.performance), True),
     ("Name",     lambda m: m.name.lower(),         False),
+    ("Template", lambda m: get_template(detect_template_id(m.name)).name, False),
 ]
 
 _NAME_WRAP = 40  # chars before wrapping model name
@@ -117,6 +119,7 @@ class ModelTable(Widget):
             eta_str = f"{m.eta}s" if m.eta else "-"
             tps = _parse_tps(m.performance)
             tps_str = f"{tps:.1f}" if tps else "-"
+            template_name = get_template(detect_template_id(m.name)).name
             name = textwrap.fill(m.name, width=_NAME_WRAP)
             table.add_row(
                 str(m.count),
@@ -126,6 +129,7 @@ class ModelTable(Widget):
                 eta_str,
                 tps_str,
                 name,
+                template_name,
                 key=m.name,  # key stays original (used for model selection)
             )
             if m.name == default_model:
