@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.horde.client import HordeClient, HordeError
 from app.horde.retry import HordeNoModelsRemainingError, HordeTimeoutError, with_retry
 from app.horde.routing import ModelNotFoundError, ModelRouter
-from app.horde.translate import completion_to_horde
+from app.horde.translate import cap_params_to_model, completion_to_horde
 from app.routers.chat import _horde_error, _log_model_ban
 from app.log_store import estimate_tokens
 from app.schemas.horde import HordeJobStatus
@@ -36,7 +36,8 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
     except HordeError as e:
         raise _horde_error(e)
 
-    horde_req = completion_to_horde(body, real_model, config)
+    model_info = next((m for m in models if m.name == real_model), None)
+    horde_req = completion_to_horde(body, real_model, config, model_info=model_info)
     _sem = getattr(request.app.state, "horde_semaphore", None) or nullcontext()
 
     _current_real_model = real_model
@@ -66,7 +67,11 @@ async def completions(request: Request, body: CompletionRequest) -> CompletionRe
             )
             if _new_model not in _tried_models:
                 _current_real_model = _new_model
-                _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+                _new_info = next((m for m in _models if m.name == _new_model), None)
+                if _new_info:
+                    _current_horde_req = cap_params_to_model(_current_horde_req, _new_info)
+                else:
+                    _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
             else:
                 raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}")
         except HordeNoModelsRemainingError:

@@ -25,7 +25,7 @@ from app.horde.retry import (
 from app.config import Settings
 from app.horde.routing import ModelNotFoundError, ModelRouter
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
-from app.horde.translate import chat_to_horde
+from app.horde.translate import cap_params_to_model, chat_to_horde
 from app.log_store import RequestLogEntry, estimate_tokens
 from app.schemas.horde import HordeJobStatus
 from app.schemas.openai import (
@@ -138,8 +138,9 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     except HordeError as e:
         raise _horde_error(e)
 
-    # Build Horde request
-    horde_req = chat_to_horde(body, real_model, config)
+    # Build Horde request (cap params to model's actual capabilities)
+    model_info = next((m for m in models if m.name == real_model), None)
+    horde_req = chat_to_horde(body, real_model, config, model_info=model_info)
 
     # Enrich the active-request indicator with model + token budget
     active_req = getattr(request.state, "active_req", None)
@@ -216,7 +217,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             if _new_model not in _tried_models_ns:
                 logger.info("re-resolved %r -> %r after failure", body.model, _new_model)
                 _current_real_model = _new_model
-                _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
+                _new_info = next((m for m in _models if m.name == _new_model), None)
+                if _new_info:
+                    _current_horde_req = cap_params_to_model(_current_horde_req, _new_info)
+                else:
+                    _current_horde_req = _current_horde_req.model_copy(update={"models": [_current_real_model]})
             else:
                 raise HordeNoModelsRemainingError(f"No models remaining for alias {body.model!r}")
         except HordeNoModelsRemainingError:
@@ -577,7 +582,11 @@ async def _stream_chat(
                         _fallback_model = None
                 if _fallback_model and _fallback_model not in _tried_models:
                     real_model = _fallback_model
-                    horde_req = horde_req.model_copy(update={"models": [real_model]})
+                    _new_info = next((m for m in _fb_models if m.name == real_model), None)
+                    if _new_info:
+                        horde_req = cap_params_to_model(horde_req, _new_info)
+                    else:
+                        horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
                     # Delay before retry (DEFAULT RETRY INTERVAL)
                     await asyncio.sleep(config.retry.poll_interval if config else 2.0)

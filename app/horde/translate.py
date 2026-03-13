@@ -4,6 +4,7 @@ from app.config import Settings
 from app.horde.templates import messages_to_prompt
 from app.horde.tool_parser import detect_tool_format
 from app.schemas.horde import (
+    HordeModel,
     HordeTextParams,
     HordeTextRequest,
 )
@@ -12,11 +13,14 @@ from app.schemas.openai import (
     CompletionRequest,
 )
 
+_FALLBACK_MAX_CONTEXT_LENGTH = 4096
+
 
 def chat_to_horde(
     request: ChatCompletionRequest,
     real_model: str,
     config: Settings,
+    model_info: HordeModel | None = None,
 ) -> HordeTextRequest:
     """Translate an OpenAI ChatCompletionRequest to a HordeTextRequest."""
     # Serialize tools for prompt injection (skip if tool_choice == "none")
@@ -33,8 +37,8 @@ def chat_to_horde(
         stop_seqs = stop_seqs + extra_stops
 
     params = HordeTextParams(
-        max_length=max(16, request.max_tokens or config.default_max_tokens),
-        max_context_length=4096,
+        max_length=_cap_max_length(request.max_tokens or config.default_max_tokens, model_info),
+        max_context_length=_cap_max_context_length(model_info),
         temperature=request.temperature,
         top_p=request.top_p,
         stop_sequence=stop_seqs or None,
@@ -64,13 +68,14 @@ def completion_to_horde(
     request: CompletionRequest,
     real_model: str,
     config: Settings,
+    model_info: HordeModel | None = None,
 ) -> HordeTextRequest:
     """Translate an OpenAI CompletionRequest to a HordeTextRequest."""
     prompt = request.prompt if isinstance(request.prompt, str) else request.prompt[0]
 
     params = HordeTextParams(
-        max_length=max(16, request.max_tokens or config.default_max_tokens),
-        max_context_length=4096,
+        max_length=_cap_max_length(request.max_tokens or config.default_max_tokens, model_info),
+        max_context_length=_cap_max_context_length(model_info),
         temperature=request.temperature,
         top_p=request.top_p,
         n=request.n,
@@ -83,6 +88,30 @@ def completion_to_horde(
         trusted_workers=config.trusted_workers,
         client_agent=config.client_agent,
     )
+
+
+def cap_params_to_model(req: HordeTextRequest, model_info: HordeModel) -> HordeTextRequest:
+    """Return a copy of req with params capped to model_info's capabilities."""
+    return req.model_copy(update={
+        "models": [model_info.name],
+        "params": req.params.model_copy(update={
+            "max_length": min(req.params.max_length, model_info.max_length),
+            "max_context_length": min(req.params.max_context_length, model_info.max_context_length),
+        }),
+    })
+
+
+def _cap_max_length(requested: int, model_info: HordeModel | None) -> int:
+    value = max(16, requested)
+    if model_info and model_info.max_length > 0:
+        value = min(value, model_info.max_length)
+    return value
+
+
+def _cap_max_context_length(model_info: HordeModel | None) -> int:
+    if model_info and model_info.max_context_length > 0:
+        return model_info.max_context_length
+    return _FALLBACK_MAX_CONTEXT_LENGTH
 
 
 def _normalize_stop(stop: str | list[str] | None) -> list[str] | None:

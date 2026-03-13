@@ -219,3 +219,4 @@ history/
 
 # Claude-code
 .claude/
+.claude/*
