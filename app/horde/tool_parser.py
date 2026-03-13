@@ -30,9 +30,60 @@ def parse_tool_call(text: str, fmt: str) -> ToolCall | None:
     result = _parse_openclaw_channel(text)
     if result is not None:
         return result
+
+    # Universal: Markdown "Action" format (Command R, Gemma, etc.)
+    result = _parse_markdown_action(text)
+    if result is not None:
+        return result
+
     if fmt == "llama3":
         return _parse_llama3(text)
     return _parse_hermes(text)
+
+
+def _parse_markdown_action(text: str) -> ToolCall | None:
+    """
+    Parse Markdown code block format with 'action' JSON.
+    Example: ``` web_search action: { "query": "..." } ```
+    """
+    # Pattern: ``` tool_name [optional whitespace] action: { JSON } [optional whitespace] ```
+    # Using a robust match that looks for the tool name and then the action block.
+    # We find the start of the action block and then search for the closing backticks.
+    match = re.search(
+        r"```\s*([\w\-]+)\s+action:\s*(\{.*?)(?=\s*[`\s]*```|$)",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        name = match.group(1)
+        raw_json = match.group(2).strip()
+
+        # Clean up: Find the LAST closing brace to ensure we have a valid-ish JSON object.
+        last_brace = raw_json.rfind("}")
+        if last_brace != -1:
+            raw_json = raw_json[: last_brace + 1]
+
+        # Handle literal newlines in the JSON string by replacing them with escaped newlines.
+        # This is common in model output within markdown blocks.
+        # However, we only want to replace newlines inside strings, but a simpler
+        # heuristic is to replace ALL literal newlines if json.loads fails.
+        try:
+            data = json.loads(raw_json)
+        except json.JSONDecodeError:
+            # Heuristic: models often output literal newlines in multi-line strings.
+            # Replace control characters (including literal newlines) with escaped versions
+            # if they are within the JSON structure.
+            # A more robust approach: replace literal \n with space or \n literal.
+            raw_json_fixed = raw_json.replace("\n", " ").replace("\r", "")
+            try:
+                data = json.loads(raw_json_fixed)
+            except json.JSONDecodeError:
+                return None
+
+        arguments = data if isinstance(data, str) else json.dumps(data)
+        return ToolCall(function=ToolCallFunction(name=name, arguments=arguments))
+
+    return None
 
 
 def _parse_openclaw_channel(text: str) -> ToolCall | None:

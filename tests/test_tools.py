@@ -62,6 +62,12 @@ TOOL_CALL_JSON_PRETTY = '''{
 }'''
 TOOL_CALL_JSON_PARAMETERS_KEY = '{"name": "get_weather", "parameters": {"city": "Berlin"}}'
 
+TOOL_CALL_MARKDOWN_ACTION = '''\
+oom, vou buscar algumas curiosidades legais do dia pra você!  ``` web_search
+  action: {   "query": "curiosidades tecnologicas recente brasileiras carro
+  mobilidade urbana2026",   "count": 10,   "country": "BR",   "language": "pt-
+  br",   "search_lang": "pt-br",   "ui_lang": "pt-BR" } ` ```'''
+
 # Plain JSON response for a hermes-format model (koboldcpp/mistral-nemo-12b)
 HERMES_JSON_TOOL_RESPONSE = '{"name": "get_weather", "arguments": {"city": "Paris"}}'
 
@@ -255,6 +261,16 @@ def test_parse_tool_call_openclaw_with_preamble():
     assert tc is not None
     assert tc.function.name == "read"
     assert json.loads(tc.function.arguments)["path"] == "/tmp/foo.md"
+
+
+def test_parse_markdown_action():
+    """Parse Markdown action format (Command R)."""
+    tc = parse_tool_call(TOOL_CALL_MARKDOWN_ACTION, "hermes")
+    assert tc is not None
+    assert tc.function.name == "web_search"
+    args = json.loads(tc.function.arguments)
+    assert "curiosidades" in args["query"]
+    assert args["count"] == 10
 
 
 def test_parse_tool_call_openclaw_llama3_format():
