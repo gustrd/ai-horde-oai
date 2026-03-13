@@ -42,7 +42,7 @@ Full endpoint tests with `httpx.AsyncClient` + `respx` mocks: basic happy path, 
 
 ### 3. Max tokens hard-capped to 512 — FIXED
 **File:** `app/config.py` → `max_max_tokens: int = 512`
-Now configurable via `config.yaml`. `chat_to_horde()` and `completion_to_horde()` use `config.max_max_tokens`.
+Now configurable via `config.yaml`. `chat_to_horde()` and `completion_to_horde()` use `config.default_max_tokens`.
 
 ### 4. No exponential backoff in retry logic — FIXED
 **File:** `app/horde/retry.py`
@@ -135,9 +135,9 @@ Widget owns all filtering (whitelist, blocklist, min_context, min_max_length + t
 **File:** `app/tui/screens/models.py`
 `on_data_table_row_selected` sets `default_model` in config, calls `save_config()`, notifies, switches to Chat. Guard checks model against current filters.
 
-### 25. Config screen doesn't re-apply filters on resume — FIXED
+### 25. Models screen doesn't re-apply filters on resume — FIXED
 **File:** `app/tui/screens/models.py`
-`on_screen_resume()` calls `widget.update_filters()` with current config values.
+`on_screen_resume()` calls `widget.update_filters()` with current config values, ensuring changes from the Config screen are reflected immediately.
 
 ### 26. "Broaden on Retry" UI option removed
 **File:** `app/tui/screens/config.py`
@@ -198,7 +198,7 @@ Behind `debug_logging: true` config flag.
 ### E. Tool/function calling translation — FIXED
 Map OpenAI `tool_choice`/`functions` to Horde prompt formatting.
 Implemented via prompt injection + output parsing. See `BETTER_TOOLS.md` for design details.
-Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/templates.py`, `app/horde/translate.py`, `app/routers/chat.py`. Tests: `tests/test_tools.py` (21 tests).
+Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/templates.py`, `app/horde/translate.py`, `app/routers/chat.py`. Tests: `tests/test_tools.py` (39 tests).
 
 ---
 
@@ -206,26 +206,27 @@ Files: `app/schemas/openai.py`, `app/horde/tool_parser.py` (new), `app/horde/tem
 
 | Test File | Tests | Coverage |
 |---|---|---|
-| `test_chat.py` | 35 | Chat endpoint: basic, aliases, system msg, 401, 500→502, 404, timeout, faulted, streaming, worker comment, IP blocks, corrupt prompt, rate limit cooldown, streaming retry delay, impossible model fallback |
+| `test_chat.py` | 42 | Chat endpoint: basic, aliases, system msg, 401, 500→502, 404, timeout, faulted, streaming, worker comment, IP blocks, corrupt prompt, rate limit cooldown, streaming retry delay, impossible model fallback |
 | `test_tools.py` | 39 | Tool/function calling: hermes, llama3, format detection, streaming, retry on bad format |
+| `test_tui.py` | 37 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history, ban status widget |
+| `test_routing.py` | 22 | Routing: best/fast/default/alias/fallback, blocklist, exclude_model, config passing |
 | `test_retry.py` | 21 | Retry: success, faulted, timeout, retries, backoff, corrupt prompt, IP block, check_ip_block, cancelled error |
-| `test_routing.py` | 19 | Routing: best/fast/default/alias/fallback, blocklist, exclude_model, config passing |
+| `test_log_store.py` | 23 | Log store: entry fields, JSONL persistence |
 | `test_model_table.py` | 19 | ModelTable: text filter, settings filters, wrapping, screen integration |
-| `test_tui.py` | 33 | TUI: welcome, dashboard, config, models, chat, kudos, model table, history, ban status widget |
 | `test_unified_log_tui.py` | 16 | Log viewer: table display, detail modal, checked flag, filtering |
-| `test_e2e.py` | 13 | End-to-end integration |
 | `test_config.py` | 14 | Config: load/save/env overrides, client_agent validation, retry fields, suspicion |
-| `test_client.py` | 10 | Client: models, caching, invalidation, errors, cancel, user, rate limiting |
-| `test_translate.py` | 9 | OpenAI ↔ Horde translation |
+| `test_e2e.py` | 13 | End-to-end integration |
+| `test_client.py` | 11 | Client: models, caching, invalidation, errors, cancel, user, rate limiting |
+| `test_api.py` | 9 | API: completions, models |
+| `test_completions.py` | 9 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
 | `test_log_middleware.py` | 9 | Request logging middleware |
-| `test_log_store.py` | 15 | Log store: entry fields, JSONL persistence |
 | `test_filters.py` | 9 | Model/worker filtering |
-| `test_api.py` | 8 | API: completions, models |
+| `test_translate.py` | 9 | OpenAI ↔ Horde translation |
 | `test_templates.py` | 7 | Chat templates: hermes, llama3, detection |
-| `test_completions.py` | 6 | Completions: basic, stream rejected, alias, 429, prompt list, model field |
 | `test_models.py` | 5 | Models list: fields, get found/not found, real names hidden |
+| `test_tui_api_e2e.py` | 1 | TUI + API integration |
 
-**Total: 298 passing, 1 skipped**
+**Total: 315 passed, 1 skipped**
 
 ---
 
