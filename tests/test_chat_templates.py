@@ -6,7 +6,7 @@ def test_template_detection():
     assert detect_template_id("Meta-Llama-3-8B-Instruct") == "llama3"
     assert detect_template_id("Mistral-7B-v0.1") == "mistral"
     assert detect_template_id("Mixtral-8x7B-Instruct-v0.1") == "mistral"
-    assert detect_template_id("Alpaca-7B") == "alpaca"
+
     assert detect_template_id("Nous-Hermes-2-ChatML") == "chatml"
     # Fallback
     assert detect_template_id("Unknown-Model-Name") == "kobold"

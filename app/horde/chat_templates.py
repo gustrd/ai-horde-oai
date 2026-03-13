@@ -53,16 +53,7 @@ TEMPLATES: dict[str, ChatTemplate] = {
             "assistant_prefix": "",
         },
     ),
-    "alpaca": ChatTemplate(
-        id="alpaca",
-        name="Alpaca",
-        sequences={
-            "system": "### System:\n{content}\n\n",
-            "user": "### Instruction:\n{content}\n\n",
-            "assistant": "### Response:\n{content}\n\n",
-            "assistant_prefix": "### Response:\n",
-        },
-    ),
+
     "kobold": ChatTemplate(
         id="kobold",
         name="KoboldAI",
