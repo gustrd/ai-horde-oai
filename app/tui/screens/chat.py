@@ -65,6 +65,24 @@ class ChatScreen(Screen):
         super().__init__(**kwargs)
         self._history: list[ChatMessage] = []
 
+    def _get_model_value(self) -> str | None:
+        """Helper to get the current model value from the Select widget, handling various empty states."""
+        try:
+            select = self.query_one("#model-select", Select)
+            val = select.value
+            # Textual Select.value can be None, Select.BLANK, or Select.NULL (in some versions)
+            if val is None or val == Select.BLANK:
+                return None
+            if hasattr(Select, "NULL") and val == getattr(Select, "NULL"):
+                return None
+            # If it's a valid string value, return it
+            if isinstance(val, str):
+                return val
+            # Fallback for unexpected types (like boolean True if somehow leaked)
+            return str(val) if val is not True and val is not False else None
+        except Exception:
+            return None
+
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="controls"):
@@ -86,33 +104,21 @@ class ChatScreen(Screen):
             options.append((alias, alias))
         
         select = self.query_one("#model-select", Select)
+        current_val = self._get_model_value()
         
-        # Priority: 1. Current value, 2. app.selected_model, 3. cfg.default_model
-        current_val = select.value
-        
-        # Check for empty selection
-        is_empty = (
-            current_val is None or 
-            current_val == Select.BLANK or 
-            (hasattr(Select, "NULL") and current_val == getattr(Select, "NULL"))
-        )
-        
-        if is_empty:
+        if current_val is None:
             # Priority: 1. Session selection from Models screen, 2. Global config default, 3. 'fast' hard fallback
             current_val = self.app.selected_model or cfg.default_model or "fast"
         
         # Ensure the selected model is in the options
         option_values = [opt[1] for opt in options]
-        if current_val and not isinstance(current_val, (bool, type(Select.BLANK))):
-            val_str = str(current_val)
-            if val_str not in option_values:
-                options.append((val_str, val_str))
+        if current_val and current_val not in option_values:
+            options.append((current_val, current_val))
             
         select.set_options(options)
-        if current_val and not isinstance(current_val, (bool, type(Select.BLANK))):
+        if current_val:
             select.value = current_val
-        elif not is_empty:
-            # If we had a value but it's now invalid, try to clear it
+        else:
             select.value = Select.BLANK
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -142,17 +148,9 @@ class ChatScreen(Screen):
         import httpx
 
         cfg = self.app.config
-        select = self.query_one("#model-select", Select)
-        model = select.value
+        model = self._get_model_value()
         
-        # Handle empty selection robustly
-        is_empty = (
-            model is None or 
-            model == Select.BLANK or 
-            (hasattr(Select, "NULL") and model == getattr(Select, "NULL"))
-        )
-
-        if is_empty:
+        if model is None:
             self.query_one("#status", Label).update("Error: No model selected.")
             return
 
