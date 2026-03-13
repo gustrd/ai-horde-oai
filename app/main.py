@@ -15,7 +15,7 @@ from app.config import Settings, load_config
 from app.horde.client import HordeClient
 from app.horde.routing import ModelRouter
 from app.log_store import RequestLogEntry
-from app.routers import chat, completions, models
+from app.routers import chat, completions, embeddings, models
 
 logger = logging.getLogger("ai-horde-oai")
 
@@ -168,6 +168,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
 
     app.include_router(chat.router)
     app.include_router(completions.router)
+    app.include_router(embeddings.router)
     app.include_router(models.router)
 
     @app.get("/health")
