@@ -93,15 +93,6 @@ class TestRequestLogEntryWithData:
         assert e.prompt == "Once upon a time"
         assert e.response_text == "there was a dragon"
 
-    def test_image_entry(self):
-        e = _entry(
-            path="/v1/images/generations",
-            model="stable_diffusion_xl",
-            prompt="A sunset over the ocean",
-        )
-        assert e.path == "/v1/images/generations"
-        assert e.prompt == "A sunset over the ocean"
-
     def test_dataclass_equality(self):
         ts = datetime(2024, 1, 15, 12, 0, 0)
         a = RequestLogEntry(timestamp=ts, method="GET", path="/v1/models", status=200, duration=0.1)

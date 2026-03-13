@@ -12,7 +12,7 @@ Legend: ✅ Implemented · 🔲 Not yet implemented
 
 **Implemented:** `_check()` in `client.py` parses `Retry-After` header and records
 a cooldown in `_rate_limited_until`. `_wait_rate_limit()` is called before every
-`submit_text_job` / `submit_image_job` — it sleeps until the cooldown expires
+`submit_text_job` — it sleeps until the cooldown expires
 transparently. The 429 error still propagates to the client on the current request
 but all subsequent requests wait out the cooldown before hitting Horde.
 

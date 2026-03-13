@@ -164,26 +164,3 @@ class StreamChunk(BaseModel):
     model: str
     choices: list[StreamChoice]
 
-
-# Image generation
-class ImageGenerationRequest(BaseModel):
-    prompt: str
-    model: str = "dall-e-3"
-    n: int = 1
-    size: str = "1024x1024"
-    quality: str = "standard"
-    response_format: str = "url"
-    user: str | None = None
-
-    model_config = {"extra": "allow"}
-
-
-class ImageData(BaseModel):
-    url: str | None = None
-    b64_json: str | None = None
-    revised_prompt: str | None = None
-
-
-class ImageGenerationResponse(BaseModel):
-    created: int = Field(default_factory=lambda: int(time.time()))
-    data: list[ImageData]

@@ -63,7 +63,6 @@ Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`
 | `/v1/chat/completions` | POST | Chat completions (streaming supported) |
 | `/v1/completions` | POST | Legacy text completions |
 | `/v1/models` | GET | List available model aliases |
-| `/v1/images/generations` | POST | DALL-E compatible image generation |
 | `/health` | GET | Health check |
 
 ## Model Aliases

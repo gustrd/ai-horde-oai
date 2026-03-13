@@ -31,7 +31,6 @@ def load_fixture(name: str):
 MODELS_FIXTURE = load_fixture("horde_models.json")
 GENERATE_FIXTURE = load_fixture("horde_generate.json")
 USER_FIXTURE = load_fixture("horde_user.json")
-IMAGE_FIXTURE = load_fixture("horde_image.json")
 
 
 @pytest.fixture
@@ -65,12 +64,6 @@ def mock_horde(respx_mock):
     )
     respx_mock.get("https://aihorde.net/api/v2/find_user").mock(
         return_value=httpx.Response(200, json=USER_FIXTURE)
-    )
-    respx_mock.post("https://aihorde.net/api/v2/generate/async").mock(
-        return_value=httpx.Response(202, json={"id": "test-image-job-id"})
-    )
-    respx_mock.get("https://aihorde.net/api/v2/generate/status/test-image-job-id").mock(
-        return_value=httpx.Response(200, json=IMAGE_FIXTURE)
     )
     return respx_mock
 

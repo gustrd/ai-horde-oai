@@ -6,8 +6,6 @@ import time
 import httpx
 
 from app.schemas.horde import (
-    HordeImageRequest,
-    HordeImageStatus,
     HordeJobStatus,
     HordeModel,
     HordeTextRequest,
@@ -295,27 +293,5 @@ class HordeClient:
     async def cancel_text_job(self, job_id: str) -> None:
         try:
             await self._request("DELETE", f"/v2/generate/text/status/{job_id}")
-        except Exception:
-            pass
-
-    async def submit_image_job(self, payload: HordeImageRequest) -> str:
-        self.check_ip_block()
-        await self._wait_rate_limit()
-        r = self._check(
-            await self._request(
-                "POST",
-                "/v2/generate/async",
-                content=payload.model_dump_json(exclude_none=True),
-            )
-        )
-        return r.json()["id"]
-
-    async def poll_image_status(self, job_id: str) -> HordeImageStatus:
-        r = self._check(await self._request("GET", f"/v2/generate/status/{job_id}"))
-        return HordeImageStatus(**r.json())
-
-    async def cancel_image_job(self, job_id: str) -> None:
-        try:
-            await self._request("DELETE", f"/v2/generate/status/{job_id}")
         except Exception:
             pass

@@ -4,15 +4,12 @@ from app.config import Settings
 from app.horde.templates import messages_to_prompt
 from app.horde.tool_parser import detect_tool_format
 from app.schemas.horde import (
-    HordeImageParams,
-    HordeImageRequest,
     HordeTextParams,
     HordeTextRequest,
 )
 from app.schemas.openai import (
     ChatCompletionRequest,
     CompletionRequest,
-    ImageGenerationRequest,
 )
 
 
@@ -88,32 +85,6 @@ def completion_to_horde(
     )
 
 
-def image_to_horde(
-    request: ImageGenerationRequest,
-    real_model: str,
-    config: Settings,
-) -> HordeImageRequest:
-    """Translate an OpenAI ImageGenerationRequest to a HordeImageRequest."""
-    width, height = _parse_size(request.size)
-    steps = 50 if request.quality == "hd" else config.image_defaults.steps
-
-    params = HordeImageParams(
-        steps=steps,
-        cfg_scale=config.image_defaults.cfg_scale,
-        width=width,
-        height=height,
-        n=request.n,
-    )
-
-    return HordeImageRequest(
-        prompt=request.prompt,
-        params=params,
-        models=[real_model],
-        r2=(request.response_format == "url"),
-        client_agent=config.client_agent,
-    )
-
-
 def _normalize_stop(stop: str | list[str] | None) -> list[str] | None:
     if stop is None:
         return None
@@ -121,10 +92,3 @@ def _normalize_stop(stop: str | list[str] | None) -> list[str] | None:
         return [stop]
     return stop
 
-
-def _parse_size(size: str) -> tuple[int, int]:
-    try:
-        w, h = size.split("x")
-        return int(w), int(h)
-    except Exception:
-        return 1024, 1024

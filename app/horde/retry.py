@@ -11,7 +11,7 @@ from app.horde.client import HordeError
 
 @runtime_checkable
 class HordeStatusLike(Protocol):
-    """Protocol satisfied by both HordeJobStatus and HordeImageStatus."""
+    """Protocol satisfied by HordeJobStatus."""
     done: bool
     faulted: bool
     generations: list[Any]
@@ -68,8 +68,7 @@ async def with_retry(
 ) -> StatusT:
     """Submit a Horde job with auto-retry, exponential backoff, and timeout.
 
-    Works with both text (HordeJobStatus) and image (HordeImageStatus) jobs
-    as long as they share the done/faulted/generations fields.
+    Works with text (HordeJobStatus) jobs.
 
     Args:
         submit_fn: Async function that submits a job and returns its ID.

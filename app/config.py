@@ -26,14 +26,6 @@ class RetrySettings(BaseModel):
     # transient retries and always ban on first is_possible=False.
 
 
-class ImageDefaults(BaseModel):
-    model: str = "stable_diffusion_xl"
-    steps: int = 30
-    cfg_scale: float = 7.5
-    width: int = 1024
-    height: int = 1024
-
-
 class Settings(BaseModel):
     horde_api_key: str = "0000000000"
     horde_api_url: str = "https://aihorde.net/api"
@@ -80,7 +72,6 @@ class Settings(BaseModel):
     global_min_request_delay: float = 2.0 # absolute minimum seconds between any two Horde API hits; 0 = unlimited
 
     retry: RetrySettings = Field(default_factory=RetrySettings)
-    image_defaults: ImageDefaults = Field(default_factory=ImageDefaults)
 
 
 def load_config(path: Path | None = None) -> Settings:

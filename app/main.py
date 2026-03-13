@@ -15,7 +15,7 @@ from app.config import Settings, load_config
 from app.horde.client import HordeClient
 from app.horde.routing import ModelRouter
 from app.log_store import RequestLogEntry
-from app.routers import chat, completions, images, models
+from app.routers import chat, completions, models
 
 logger = logging.getLogger("ai-horde-oai")
 
@@ -88,7 +88,6 @@ def create_app(config: Settings | None = None) -> FastAPI:
         LOG_PATHS = {
             "/v1/chat/completions",
             "/v1/completions",
-            "/v1/images/generations",
         }
 
         if request.url.path in LOG_PATHS:
@@ -128,7 +127,6 @@ def create_app(config: Settings | None = None) -> FastAPI:
         LOG_PATHS = {
             "/v1/chat/completions",
             "/v1/completions",
-            "/v1/images/generations",
         }
         if request.url.path in LOG_PATHS:
             extras: dict = getattr(request.state, "log_extras", {})
@@ -171,7 +169,6 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.include_router(chat.router)
     app.include_router(completions.router)
     app.include_router(models.router)
-    app.include_router(images.router)
 
     @app.get("/health")
     async def health():

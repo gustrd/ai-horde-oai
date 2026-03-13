@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import Settings
-from app.horde.translate import _normalize_stop, _parse_size, chat_to_horde, completion_to_horde
+from app.horde.translate import _normalize_stop, chat_to_horde, completion_to_horde
 from app.schemas.openai import ChatCompletionRequest, ChatMessage, CompletionRequest
 
 
@@ -72,8 +72,3 @@ def test_normalize_stop_str():
 
 def test_normalize_stop_list():
     assert _normalize_stop(["A", "B"]) == ["A", "B"]
-
-
-def test_parse_size():
-    assert _parse_size("1024x768") == (1024, 768)
-    assert _parse_size("invalid") == (1024, 1024)

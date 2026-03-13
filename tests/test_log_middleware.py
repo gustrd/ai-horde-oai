@@ -13,7 +13,7 @@ from app.horde.routing import ModelRouter
 from app.log_store import RequestLogEntry
 from app.main import create_app
 
-from tests.conftest import GENERATE_FIXTURE, IMAGE_FIXTURE, MODELS_FIXTURE
+from tests.conftest import GENERATE_FIXTURE, MODELS_FIXTURE
 
 
 # ---------------------------------------------------------------------------
@@ -267,39 +267,6 @@ async def test_completions_logs_entry(test_config, respx_mock):
     assert entry.response_text == "a time."
     assert entry.worker == "W2"
     assert entry.kudos == 3.0
-
-
-# ---------------------------------------------------------------------------
-# Images
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_image_generation_logs_entry(test_config, respx_mock):
-    """/v1/images/generations logs an entry with prompt and model."""
-    respx_mock.post("https://aihorde.net/api/v2/generate/async").mock(
-        return_value=httpx.Response(202, json={"id": "img-job"})
-    )
-    respx_mock.get("https://aihorde.net/api/v2/generate/status/img-job").mock(
-        return_value=httpx.Response(200, json=IMAGE_FIXTURE)
-    )
-
-    request_log: list[RequestLogEntry] = []
-    app, horde = _make_app(test_config, request_log)
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/v1/images/generations", json={
-            "prompt": "A dragon flying over mountains",
-        })
-
-    await horde.close()
-
-    assert r.status_code == 200
-    assert len(request_log) == 1
-    entry = request_log[0]
-    assert entry.path == "/v1/images/generations"
-    assert entry.prompt == "A dragon flying over mountains"
-    assert entry.model != ""
 
 
 # ---------------------------------------------------------------------------

@@ -9,9 +9,7 @@ import pytest
 
 from app.horde.client import HordeClient, HordeError, HordeIPTimeoutError, HordeUnsafeIPError
 from app.horde.retry import HordeCorruptPromptError, HordeTimeoutError, with_retry
-from app.schemas.horde import HordeGeneration, HordeImageGeneration, HordeImageStatus, HordeJobStatus
-
-
+from app.schemas.horde import HordeGeneration, HordeJobStatus
 
 
 def _done_text_status():
@@ -30,14 +28,6 @@ def _faulted_text_status():
     return HordeJobStatus(done=False, faulted=True, generations=[], kudos=0)
 
 
-def _done_image_status():
-    return HordeImageStatus(
-        done=True, faulted=False,
-        generations=[HordeImageGeneration(img="http://img.url", seed="1", worker_id="w", worker_name="n", model="m")],
-        kudos=10.0,
-    )
-
-
 async def test_success_first_attempt():
     """Returns immediately on first successful poll."""
     status = _done_text_status()
@@ -49,17 +39,6 @@ async def test_success_first_attempt():
     assert result is status
     submit_fn.assert_awaited_once()
     cancel_fn.assert_not_awaited()
-
-
-async def test_works_with_image_status():
-    """with_retry works with HordeImageStatus (generic protocol)."""
-    status = _done_image_status()
-    submit_fn = AsyncMock(return_value="img-job-1")
-    poll_fn = AsyncMock(return_value=status)
-    cancel_fn = AsyncMock()
-
-    result = await with_retry(submit_fn, poll_fn, cancel_fn, poll_interval=0)
-    assert result is status
 
 
 async def test_faulted_then_cancelled():

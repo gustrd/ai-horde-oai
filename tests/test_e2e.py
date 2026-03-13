@@ -14,7 +14,6 @@ from app.main import create_app
 
 from tests.conftest import (
     GENERATE_FIXTURE,
-    IMAGE_FIXTURE,
     MODELS_FIXTURE,
     USER_FIXTURE,
 )
@@ -40,70 +39,6 @@ def _init_state(app, config):
     app.state.horde = horde
     app.state.model_router = ModelRouter(config)
     return horde
-
-
-# ---------------------------------------------------------------------------
-# Image generation
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_image_generation_url(test_config, respx_mock):
-    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
-        return_value=httpx.Response(200, json=MODELS_FIXTURE)
-    )
-    respx_mock.post("https://aihorde.net/api/v2/generate/async").mock(
-        return_value=httpx.Response(202, json={"id": "test-image-job-id"})
-    )
-    respx_mock.get("https://aihorde.net/api/v2/generate/status/test-image-job-id").mock(
-        return_value=httpx.Response(200, json=IMAGE_FIXTURE)
-    )
-
-    app = _make_app(test_config)
-    horde = _init_state(app, test_config)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/v1/images/generations", json={
-            "prompt": "A beautiful sunset over the ocean",
-            "model": "dall-e-3",
-            "size": "1024x1024",
-            "response_format": "url",
-        })
-    await horde.close()
-
-    assert r.status_code == 200
-    data = r.json()
-    assert "data" in data
-    assert len(data["data"]) == 1
-    assert data["data"][0]["url"] is not None
-    assert data["data"][0]["b64_json"] is None
-
-
-@pytest.mark.asyncio
-async def test_image_generation_b64(test_config, respx_mock):
-    respx_mock.get("https://aihorde.net/api/v2/status/models").mock(
-        return_value=httpx.Response(200, json=MODELS_FIXTURE)
-    )
-    respx_mock.post("https://aihorde.net/api/v2/generate/async").mock(
-        return_value=httpx.Response(202, json={"id": "test-image-job-id"})
-    )
-    respx_mock.get("https://aihorde.net/api/v2/generate/status/test-image-job-id").mock(
-        return_value=httpx.Response(200, json=IMAGE_FIXTURE)
-    )
-
-    app = _make_app(test_config)
-    horde = _init_state(app, test_config)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.post("/v1/images/generations", json={
-            "prompt": "A beautiful sunset",
-            "response_format": "b64_json",
-        })
-    await horde.close()
-
-    assert r.status_code == 200
-    data = r.json()
-    assert data["data"][0]["b64_json"] is not None
-    assert data["data"][0]["url"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -360,14 +295,5 @@ async def test_chat_missing_messages_returns_422(client):
     r = await client.post("/v1/chat/completions", json={
         "model": "default",
         # "messages" intentionally omitted
-    })
-    assert r.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_image_missing_prompt_returns_422(client):
-    r = await client.post("/v1/images/generations", json={
-        "model": "dall-e-3",
-        # "prompt" intentionally omitted
     })
     assert r.status_code == 422
