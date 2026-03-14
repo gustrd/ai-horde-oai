@@ -7,6 +7,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from app.horde.client import HordeError
+from app import constants
 
 
 @runtime_checkable
@@ -57,14 +58,14 @@ async def with_retry(
     submit_fn: Callable[[], Coroutine[Any, Any, str]],
     poll_fn: Callable[[str], Coroutine[Any, Any, StatusT]],
     cancel_fn: Callable[[str], Coroutine[Any, Any, None]],
-    max_retries: int = 2,
+    max_retries: int = constants.DEFAULT_MAX_RETRIES,
     timeout_seconds: int = 300,
     broaden_on_retry: bool = True,
-    backoff_base: float = 2.0,
+    backoff_base: float = constants.DEFAULT_BACKOFF_BASE,
     on_broaden: Callable[[], Any] | None = None,
     on_status: Callable[[Any], None] | None = None,
     on_submit: Callable[[str], None] | None = None,
-    poll_interval: float = 2.0,
+    poll_interval: float = constants.DEFAULT_POLL_INTERVAL,
 ) -> StatusT:
     """Submit a Horde job with auto-retry, exponential backoff, and timeout.
 

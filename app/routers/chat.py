@@ -24,6 +24,7 @@ from app.horde.retry import (
 )
 from app.config import Settings
 from app.horde.routing import ModelNotFoundError, ModelRouter
+from app import constants
 from app.horde.tool_parser import detect_tool_format, parse_tool_call
 from app.horde.translate import cap_params_to_model, chat_to_horde
 from app.log_store import RequestLogEntry, estimate_tokens
@@ -207,7 +208,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         _transient_count = 0
         _tried_models_ns.add(_current_real_model)
         if _count is not None and _count == 0:
-            horde.ban_model(_current_real_model, duration=3600.0)
+            horde.ban_model(_current_real_model, duration=constants.MODEL_BAN_DURATION)
             _log_model_ban(request, body.model, _current_real_model)
         # Re-resolve excluding all models tried this request
         try:
@@ -402,7 +403,7 @@ async def _stream_chat(
     horde_req,
     alias: str,
     real_model: str,
-    stall_timeout: int = 120,
+    stall_timeout: int = constants.DEFAULT_STREAM_STALL_TIMEOUT,
     request: Request | None = None,
     log_messages: list | None = None,
     tools_fmt: str | None = None,
@@ -458,7 +459,7 @@ async def _stream_chat(
 
             # Delay between retry attempts (P1-B)
             if _attempt > 0:
-                _retry_delay = (config.retry.streaming_retry_delay if config else 2.0)
+                _retry_delay = (config.retry.streaming_retry_delay if config else constants.DEFAULT_RETRY_DELAY)
                 if _retry_delay > 0:
                     await asyncio.sleep(_retry_delay)
 
@@ -523,7 +524,7 @@ async def _stream_chat(
                             _transient_count = 0
                             _tried_models.add(real_model)
                             if _count is not None and _count == 0:
-                                horde.ban_model(real_model, duration=3600.0)
+                                horde.ban_model(real_model, duration=constants.MODEL_BAN_DURATION)
                                 _log_model_ban(request, alias, real_model)
                             _abort_reason = "impossible"
                         yield ": x-horde-abort reason=impossible\n\n"
@@ -561,11 +562,11 @@ async def _stream_chat(
                             if refresh_cb:
                                 refresh_cb()
 
-                    await asyncio.sleep(config.retry.poll_interval if config else 2.0)
+                    await asyncio.sleep(config.retry.poll_interval if config else constants.DEFAULT_POLL_INTERVAL)
 
             if _abort_reason == "transient":
                 # is_possible=False but model still has workers — resubmit same model
-                await asyncio.sleep(config.retry.poll_interval if config else 2.0)
+                await asyncio.sleep(config.retry.poll_interval if config else constants.DEFAULT_POLL_INTERVAL)
                 continue
 
             if _abort_reason == "impossible":
@@ -596,7 +597,7 @@ async def _stream_chat(
                             horde_req = horde_req.model_copy(update={"models": [real_model]})
                     yield f": x-horde-resolved model={real_model}\n\n"
                     # Delay before retry (DEFAULT RETRY INTERVAL)
-                    await asyncio.sleep(config.retry.poll_interval if config else 2.0)
+                    await asyncio.sleep(config.retry.poll_interval if config else constants.DEFAULT_POLL_INTERVAL)
                     continue  # retry with new model without incrementing _attempt
                 # No untried fallback available — fail with clear message
                 response_text = "[MODEL_UNAVAILABLE: no valid active workers on AI Horde]"

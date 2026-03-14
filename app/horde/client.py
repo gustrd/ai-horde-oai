@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from app import constants
 from app.schemas.horde import (
     HordeJobStatus,
     HordeModel,
@@ -167,11 +168,11 @@ class HordeClient:
                 detail, rc = response.text, ""
 
             if rc == "TimeoutIP":
-                self._ip_blocked_until = time.monotonic() + 3600.0
+                self._ip_blocked_until = time.monotonic() + constants.TIMEOUT_IP_COOLDOWN
                 self._ip_block_reason = "TimeoutIP"
                 raise HordeIPTimeoutError(detail)
             if rc == "UnsafeIP":
-                self._ip_blocked_until = time.monotonic() + 21600.0  # 6h cache TTL
+                self._ip_blocked_until = time.monotonic() + constants.UNSAFE_IP_COOLDOWN
                 self._ip_block_reason = "UnsafeIP"
                 raise HordeUnsafeIPError(detail)
             if response.status_code == 429:
@@ -203,11 +204,13 @@ class HordeClient:
         self._model_cache_expires = 0.0
         self._enriched_cache_expires = 0.0
 
-    def ban_model(self, name: str, duration: float = 3600.0) -> None:
+    def ban_model(self, name: str, duration: float = constants.MODEL_BAN_DURATION) -> None:
         """Ban a model from routing for *duration* seconds and remove it from caches."""
         self._banned_models[name] = time.monotonic() + duration
         self._model_cache = [m for m in self._model_cache if m.name != name]
         self._enriched_cache = [m for m in self._enriched_cache if m.name != name]
+        self._model_cache_expires = 0.0
+        self._enriched_cache_expires = 0.0
 
     def unban_all_models(self) -> None:
         """Clear all local model bans and invalidate caches."""

@@ -124,10 +124,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
 
         # Only log generation endpoints; skip health checks, model lists, and other system paths.
         # Streaming routes set log_extras["_streaming"] = True and log themselves.
-        LOG_PATHS = {
-            "/v1/chat/completions",
-            "/v1/completions",
-        }
+        if request.url.path not in {"/v1/chat/completions", "/v1/completions"}:
+            return response
         if request.url.path in LOG_PATHS:
             extras: dict = getattr(request.state, "log_extras", {})
             if not extras.get("_streaming"):
