@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Label
 
 from app.config import Settings
@@ -321,6 +322,33 @@ async def test_logs_screen_row_selected_opens_modal():
 
             # A LogDetailModal should now be on the screen stack
             assert any(isinstance(s, LogDetailModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_logs_screen_toggle_checked_action():
+    """Pressing space toggles the checked flag and updates the table."""
+    app = HordeApp(config=make_config(), start_server=False)
+    entry = make_entry(checked=False)
+    app.request_log.append(entry)
+
+    with patch.object(HordeApp, "on_mount", new=AsyncMock()), \
+         patch("app.tui.screens.logs.save_entries") as mock_save:
+        async with app.run_test() as pilot:
+            screen = LogsScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            table = screen.query_one(DataTable)
+            # Coordinate(row, col) - checked is at column 0
+            assert table.get_cell_at(Coordinate(0, 0)) == " "
+
+            # Trigger toggle action by pressing space
+            await pilot.press("space")
+            await pilot.pause()
+
+            assert entry.checked is True
+            assert table.get_cell_at(Coordinate(0, 0)) == "*"
+            mock_save.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

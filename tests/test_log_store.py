@@ -58,6 +58,10 @@ class TestRequestLogEntryDefaults:
         e = _entry()
         assert e.source == "api"
 
+    def test_checked_defaults_to_false(self):
+        e = _entry()
+        assert e.checked is False
+
 
 class TestRequestLogEntryWithData:
     def test_full_chat_entry(self):
@@ -156,6 +160,11 @@ class TestSerialisationRoundTrip:
         result = entry_from_dict(d)
         assert isinstance(result.timestamp, datetime)
 
+    def test_checked_round_trip(self):
+        e = _entry(checked=True)
+        restored = entry_from_dict(entry_to_dict(e))
+        assert restored.checked is True
+
 
 # ---------------------------------------------------------------------------
 # File persistence
@@ -170,6 +179,18 @@ class TestFilePersistence:
         assert len(loaded) == 1
         assert loaded[0].model == "m1"
         assert loaded[0].response_text == "hello"
+
+    def test_save_and_reload_checked_flag(self, tmp_path):
+        from app.log_store import save_entries
+        p = tmp_path / "requests.jsonl"
+        e1 = _entry(model="m1", checked=True)
+        e2 = _entry(model="m2", checked=False)
+        save_entries([e1, e2], path=p)
+
+        loaded = load_entries(path=p)
+        assert len(loaded) == 2
+        assert loaded[0].checked is True
+        assert loaded[1].checked is False
 
     def test_multiple_entries_preserved_in_order(self, tmp_path):
         p = tmp_path / "requests.jsonl"
