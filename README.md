@@ -100,10 +100,17 @@ The proxy implements sophisticated retry logic to ensure high reliability despit
 ## Docker
 
 ```bash
-docker-compose up
+HORDE_API_KEY=your-key docker compose up --build
 ```
 
-Set `HORDE_API_KEY` in the environment or mount a `config.yaml`.
+To use a config file, create `config.yaml` first, then add the volume mount:
+
+```yaml
+volumes:
+  - ./config.yaml:/root/.ai-horde-oai/config.yaml
+```
+
+> **Note:** `docker-compose` (v1) or `podman compose` work as drop-in replacements.
 
 ## Development
 

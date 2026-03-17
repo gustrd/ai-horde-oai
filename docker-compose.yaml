@@ -3,8 +3,6 @@ services:
     build: .
     ports:
       - "8000:8000"
-    volumes:
-      - ./config.yaml:/root/.ai-horde-oai/config.yaml
     environment:
       - HORDE_API_KEY=${HORDE_API_KEY}
     restart: unless-stopped
