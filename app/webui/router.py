@@ -175,6 +175,8 @@ async def get_models(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
+    total_unfiltered = len(models)
+
     config: Settings = request.app.state.config
     models = filter_models(
         models,
@@ -184,10 +186,9 @@ async def get_models(request: Request):
         min_max_length=config.model_min_max_length,
     )
 
-    total = len(models)
-    # Store hints for dashboard
-    request.app.state.model_count_hint = total
-    request.app.state.model_total_hint = total
+    # Store hints for dashboard: count = after filters, total = before filters
+    request.app.state.model_count_hint = len(models)
+    request.app.state.model_total_hint = total_unfiltered
 
     return [
         {
