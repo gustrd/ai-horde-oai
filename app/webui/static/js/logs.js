@@ -12,9 +12,9 @@ function logsTab() {
         if (e.detail === 'logs') this.load();
       });
 
-      // Real-time updates via WebSocket
-      wsClient.on('log_entry', (data) => {
-        this.entries.unshift(data);
+      // Real-time updates via WebSocket – reload everything to avoid race duplicates
+      wsClient.on('log_entry', () => {
+        this.load();
       });
       wsClient.on('active_requests', (data) => {
         this.active = Array.isArray(data) ? data : [];

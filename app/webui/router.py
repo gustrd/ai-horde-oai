@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, save_config
+from app.horde.filters import filter_models
 from app.log_store import entry_to_dict, load_entries, save_entries
 from app.webui.ws import ws_manager
 
@@ -173,6 +174,15 @@ async def get_models(request: Request):
         models = await horde.get_enriched_models()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+    config: Settings = request.app.state.config
+    models = filter_models(
+        models,
+        whitelist=config.model_whitelist or None,
+        blocklist=config.model_blocklist or None,
+        min_context=config.model_min_context,
+        min_max_length=config.model_min_max_length,
+    )
 
     total = len(models)
     # Store hints for dashboard
