@@ -108,5 +108,6 @@ Set `HORDE_API_KEY` in the environment or mount a `config.yaml`.
 ## Development
 
 ```bash
+uv sync --extra dev
 uv run pytest
 ```
