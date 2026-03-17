@@ -49,7 +49,7 @@ class Settings(BaseModel):
             )
         return v
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
-    default_max_tokens: int = 2048  # fallback when client doesn't specify max_tokens
+    default_max_tokens: int = 256   # fallback when client doesn't specify max_tokens
     model_cache_ttl: int = 30       # seconds to cache /v2/status/models response
     stream_stall_timeout: int = 120  # seconds without progress before aborting SSE
     max_concurrent_requests: int = 3  # max simultaneous Horde jobs; 0 = unlimited
@@ -59,8 +59,8 @@ class Settings(BaseModel):
     model_aliases: dict[str, str] = Field(default_factory=dict)
 
     # Model filters
-    model_min_context: int = 0
-    model_min_max_length: int = 0
+    model_min_context: int = 512
+    model_min_max_length: int = 256
     model_whitelist: list[str] = Field(default_factory=list)
     model_blocklist: list[str] = Field(default_factory=list)
 
