@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ai-horde-oai</title>
+  <link rel="stylesheet" href="/ui/static/css/style.css" />
+  <script src="/ui/static/vendor/marked.min.js"></script>
+  <script src="/ui/static/js/ws-client.js"></script>
+  <script src="/ui/static/js/dashboard.js"></script>
+  <script src="/ui/static/js/chat.js"></script>
+  <script src="/ui/static/js/models.js"></script>
+  <script src="/ui/static/js/config.js"></script>
+  <script src="/ui/static/js/logs.js"></script>
+  <script src="/ui/static/js/app.js"></script>
+  <script src="/ui/static/vendor/alpine.min.js" defer></script>
+</head>
+<body>
+<div id="app" x-data="appShell()" x-init="init()">
+
+  <!-- ── Tab bar ─────────────────────────────────────────── -->
+  <nav class="tab-bar">
+    <div class="tab-bar-left">
+      <span class="app-title">ai-horde-oai</span>
+      <template x-for="(tab, idx) in tabs" :key="tab.id">
+        <button class="tab-btn"
+          :class="{ active: activeTab === tab.id }"
+          @click="switchTab(tab.id)"
+          x-text="tab.label">
+        </button>
+      </template>
+    </div>
+    <div class="tab-bar-right">
+      <span class="ws-indicator" :class="wsStatus">
+        <span class="ws-dot"></span>
+        <span x-text="wsStatusText"></span>
+      </span>
+    </div>
+  </nav>
+
+  <!-- ── Tab content ────────────────────────────────────── -->
+  <main class="tab-content">
+
+    <!-- Dashboard -->
+    <div x-show="activeTab === 'dashboard'" x-data="dashboardTab()" x-init="init()">
+      <div class="panel">
+        <div class="panel-row">
+          <!-- Connection card -->
+          <div class="card">
+            <div class="card-title">Connection</div>
+            <div class="kv-row"><span class="kv-label">Server</span><span class="kv-value mono" x-text="d.server || '—'"></span></div>
+            <div class="kv-row"><span class="kv-label">API Key</span><span class="kv-value mono" x-text="d.api_key_masked || '—'"></span></div>
+            <div class="kv-row"><span class="kv-label">Horde URL</span><span class="kv-value mono truncate" x-text="d.horde_url || '—'"></span></div>
+            <div class="kv-row" x-show="d.user && d.user.username">
+              <span class="kv-label">User</span>
+              <span class="kv-value" x-text="(d.user && d.user.username) || '—'"></span>
+            </div>
+          </div>
+
+          <!-- Status card -->
+          <div class="card">
+            <div class="card-title">Horde Status</div>
+            <div class="kv-row">
+              <span class="kv-label">IP Block</span>
+              <span class="kv-value"
+                :class="d.ip_blocked ? 'error' : 'ok'"
+                x-text="d.ip_blocked ? (d.ip_block_reason + ' (' + d.ip_block_remaining + 's)') : 'OK'">
+              </span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-label">Rate Limit</span>
+              <span class="kv-value"
+                :class="d.rate_limited ? 'warn' : 'ok'"
+                x-text="d.rate_limited ? ('Cooling (' + d.rate_limit_remaining + 's)') : 'OK'">
+              </span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-label">Models</span>
+              <span class="kv-value" x-text="d.model_count > 0 ? d.model_count + ' available' : '—'"></span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-label">Default Model</span>
+              <span class="kv-value truncate" x-text="d.default_model || '—'"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-row">
+          <!-- Kudos card -->
+          <div class="card">
+            <div class="card-title">Kudos</div>
+            <div class="kv-row">
+              <span class="kv-label">Balance</span>
+              <span class="kv-value" :class="(d.user && d.user.kudos < 100) ? 'error' : ''"
+                x-text="(d.user && d.user.kudos !== undefined) ? d.user.kudos.toLocaleString() : '—'">
+              </span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-label">Session Spent</span>
+              <span class="kv-value" x-text="d.session_kudos !== undefined ? d.session_kudos.toLocaleString() : '0'"></span>
+            </div>
+            <div class="kudos-bar-wrap" x-show="d.user && d.user.kudos !== undefined">
+              <div class="kudos-bar-fill"
+                :class="{ low: d.user && d.user.kudos < 100 }"
+                :style="'width:' + Math.min(100, ((d.user && d.user.kudos) || 0) / 10000 * 100) + '%'">
+              </div>
+            </div>
+          </div>
+
+          <!-- Activity card -->
+          <div class="card">
+            <div class="card-title">Activity</div>
+            <div class="kv-row"><span class="kv-label">Requests</span><span class="kv-value" x-text="d.request_count ?? 0"></span></div>
+            <template x-if="d.last_request">
+              <div>
+                <div class="kv-row">
+                  <span class="kv-label">Last Time</span>
+                  <span class="kv-value" x-text="fmtTime(d.last_request.timestamp)"></span>
+                </div>
+                <div class="kv-row">
+                  <span class="kv-label">Last Model</span>
+                  <span class="kv-value truncate" x-text="d.last_request.model || '—'"></span>
+                </div>
+                <div class="kv-row">
+                  <span class="kv-label">Last Duration</span>
+                  <span class="kv-value" x-text="d.last_request.duration ? d.last_request.duration.toFixed(1) + 's' : '—'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Banned models card -->
+        <div class="card" x-show="d.banned_models && d.banned_models.length > 0">
+          <div class="card-title flex-center">
+            Banned Models
+            <button class="btn btn-sm btn-danger ml-auto" @click="unban()">Unban All</button>
+          </div>
+          <template x-for="ban in (d.banned_models || [])" :key="ban.name">
+            <div class="ban-row">
+              <span x-text="ban.name"></span>
+              <span class="dim" x-text="ban.remaining + 's'"></span>
+            </div>
+          </template>
+        </div>
+
+        <div class="flex-center" style="gap:8px">
+          <button class="btn" @click="load()">Refresh</button>
+          <span class="dim" x-text="lastRefresh ? 'Updated ' + lastRefresh : ''"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div x-show="activeTab === 'chat'" x-data="chatTab()" x-init="init()">
+      <div class="chat-layout" @keydown.document="onKeydown($event)">
+        <!-- Controls row -->
+        <div class="chat-controls">
+          <label class="kv-label" style="width:auto">Model</label>
+          <select x-model="selectedModel">
+            <option value="default">default</option>
+            <option value="best">best</option>
+            <option value="fast">fast</option>
+            <template x-for="alias in modelAliases" :key="alias">
+              <option :value="alias" x-text="alias"></option>
+            </template>
+          </select>
+          <button class="btn btn-sm" @click="clearChat()">Clear</button>
+        </div>
+
+        <!-- System prompt -->
+        <textarea class="chat-system-prompt" placeholder="System prompt (optional)…" x-model="systemPrompt"></textarea>
+
+        <!-- Messages -->
+        <div class="chat-messages" x-ref="msgContainer">
+          <template x-if="messages.length === 0">
+            <div class="dim" style="margin:auto;padding:20px;text-align:center">Send a message to start chatting.</div>
+          </template>
+          <template x-for="(msg, idx) in messages" :key="idx">
+            <div class="msg-bubble" :class="msg.role">
+              <div x-html="renderMsg(msg)"></div>
+              <template x-if="msg.reasoning">
+                <div>
+                  <div class="reasoning-toggle" @click="msg._showReasoning = !msg._showReasoning">
+                    <span x-text="msg._showReasoning ? '▾' : '▸'"></span>
+                    <span>Reasoning</span>
+                  </div>
+                  <div class="reasoning-block" x-show="msg._showReasoning" x-text="msg.reasoning"></div>
+                </div>
+              </template>
+              <div class="msg-meta" x-show="msg.meta" x-text="msg.meta"></div>
+            </div>
+          </template>
+          <template x-if="sending">
+            <div class="msg-bubble assistant">
+              <span class="spinner"></span> Waiting for response…
+            </div>
+          </template>
+        </div>
+
+        <!-- Input row -->
+        <div class="chat-input-row">
+          <input type="text" placeholder="Message…" x-model="inputText"
+            @keydown.enter.prevent="send()"
+            :disabled="sending" />
+          <button class="btn btn-primary" @click="send()" :disabled="sending">Send</button>
+        </div>
+
+        <!-- Status bar -->
+        <div class="chat-status" :class="statusClass" x-text="statusText"></div>
+      </div>
+    </div>
+
+    <!-- Models -->
+    <div x-show="activeTab === 'models'" x-data="modelsTab()" x-init="init()">
+      <div class="models-toolbar">
+        <input type="text" placeholder="Search models…" x-model="search" />
+        <span class="dim" x-text="filtered.length + ' / ' + models.length + ' models'"></span>
+        <button class="btn btn-sm" @click="refresh()" :disabled="loading">
+          <span x-show="loading" class="spinner"></span>
+          Refresh
+        </button>
+      </div>
+      <div class="table-wrap" style="flex:1">
+        <table>
+          <thead>
+            <tr>
+              <template x-for="col in cols" :key="col.key">
+                <th @click="sortBy(col.key)">
+                  <span x-text="col.label"></span>
+                  <span x-show="sortKey === col.key" x-text="sortAsc ? ' ▲' : ' ▼'"></span>
+                </th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="m in filtered" :key="m.name">
+              <tr @click="selectModel(m.name)" :title="'Set default: ' + m.name">
+                <td x-text="m.count"></td>
+                <td x-text="m.max_context_length ? m.max_context_length.toLocaleString() : '—'"></td>
+                <td x-text="m.max_length || '—'"></td>
+                <td x-text="m.queued || 0"></td>
+                <td x-text="m.eta ? m.eta + 's' : '—'"></td>
+                <td x-text="typeof m.performance === 'number' ? m.performance.toFixed(1) : (m.performance || '—')"></td>
+                <td class="truncate" x-text="m.name" style="max-width:300px"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Config -->
+    <div x-show="activeTab === 'config'" x-data="configTab()" x-init="init()" @keydown="onKeydown($event)">
+      <div class="config-layout" x-show="cfg">
+        <!-- API Settings -->
+        <div class="form-section">
+          <div class="form-section-title">API Settings</div>
+          <div class="field"><label>API Key</label><input type="password" x-model="cfg.horde_api_key" /></div>
+          <div class="field"><label>Horde API URL</label><input type="text" x-model="cfg.horde_api_url" /></div>
+          <div class="field"><label>Client Agent</label><input type="text" x-model="cfg.client_agent" /></div>
+        </div>
+        <!-- Server Settings -->
+        <div class="form-section">
+          <div class="form-section-title">Server Settings</div>
+          <div class="field"><label>Host</label><input type="text" x-model="cfg.host" /></div>
+          <div class="field"><label>Port</label><input type="number" x-model="cfg.port" /></div>
+          <div class="field"><label>Max Concurrent Requests</label><input type="number" x-model="cfg.max_concurrent_requests" /></div>
+          <div class="field"><label>Default Max Tokens</label><input type="number" x-model="cfg.default_max_tokens" /></div>
+          <div class="field"><label>CORS Origins (one per line)</label><textarea x-model="cfg.cors_origins" rows="2"></textarea></div>
+        </div>
+        <!-- Model Settings -->
+        <div class="form-section">
+          <div class="form-section-title">Model Settings</div>
+          <div class="field"><label>Default Model</label><input type="text" x-model="cfg.default_model" /></div>
+          <div class="field"><label>Model Aliases (key: value)</label><textarea x-model="cfg.model_aliases" rows="3" placeholder="fast: model-name&#10;best: other-model"></textarea></div>
+          <div class="field"><label>Min Context Length</label><input type="number" x-model="cfg.model_min_context" /></div>
+          <div class="field"><label>Min Max Length</label><input type="number" x-model="cfg.model_min_max_length" /></div>
+          <div class="field"><label>Whitelist (one per line)</label><textarea x-model="cfg.model_whitelist" rows="3"></textarea></div>
+          <div class="field"><label>Blocklist (one per line)</label><textarea x-model="cfg.model_blocklist" rows="3"></textarea></div>
+          <div class="field"><label>Model Cache TTL (s)</label><input type="number" x-model="cfg.model_cache_ttl" /></div>
+        </div>
+        <!-- Worker Settings -->
+        <div class="form-section">
+          <div class="form-section-title">Worker Settings</div>
+          <div class="field"><label>Trusted Workers Only</label><input type="checkbox" x-model="cfg.trusted_workers" /></div>
+          <div class="field"><label>Worker Whitelist (one per line)</label><textarea x-model="cfg.worker_whitelist" rows="3"></textarea></div>
+          <div class="field"><label>Worker Blocklist (one per line)</label><textarea x-model="cfg.worker_blocklist" rows="3"></textarea></div>
+        </div>
+        <!-- Retry Settings -->
+        <div class="form-section" x-show="cfg.retry">
+          <div class="form-section-title">Retry Settings</div>
+          <div class="field"><label>Max Retries</label><input type="number" x-model="cfg.retry.max_retries" /></div>
+          <div class="field"><label>Timeout (s)</label><input type="number" x-model="cfg.retry.timeout_seconds" /></div>
+          <div class="field"><label>Poll Interval (s)</label><input type="number" x-model="cfg.retry.poll_interval" /></div>
+          <div class="field"><label>Rate Limit Backoff (s)</label><input type="number" x-model="cfg.retry.rate_limit_backoff" /></div>
+          <div class="field"><label>Broaden On Retry</label><input type="checkbox" x-model="cfg.retry.broaden_on_retry" /></div>
+        </div>
+        <!-- Other -->
+        <div class="form-section">
+          <div class="form-section-title">Other</div>
+          <div class="field"><label>Global Min Request Delay (s)</label><input type="number" step="0.5" x-model="cfg.global_min_request_delay" /></div>
+          <div class="field"><label>Stream Stall Timeout (s)</label><input type="number" x-model="cfg.stream_stall_timeout" /></div>
+        </div>
+      </div>
+      <div class="config-footer">
+        <button class="btn btn-primary" @click="save()" :disabled="loading">
+          <span x-show="loading" class="spinner"></span>
+          Save (Ctrl+S)
+        </button>
+        <template x-if="status">
+          <span class="status-msg" :class="status.type" x-text="status.msg"></span>
+        </template>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div x-show="activeTab === 'logs'" x-data="logsTab()" x-init="init()">
+      <div class="logs-layout">
+        <div class="logs-toolbar">
+          <span class="kv-label">Logs</span>
+          <span class="dim" x-text="entries.length + ' entries'"></span>
+          <button class="btn btn-sm btn-danger ml-auto" @click="clearLogs()">Clear All</button>
+        </div>
+        <div class="table-wrap" style="flex:1">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:24px"></th>
+                <th>Time</th>
+                <th>Status</th>
+                <th>Dur</th>
+                <th>Model</th>
+                <th>Kudos</th>
+                <th>Tokens</th>
+                <th>Preview</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(e, idx) in entries" :key="idx">
+                <tr @click="openDetail(idx)" :class="{ checked: e.checked }">
+                  <td>
+                    <input type="checkbox" :checked="e.checked"
+                      @click.stop="toggleCheck(idx)" />
+                  </td>
+                  <td x-text="fmtTime(e.timestamp)" style="white-space:nowrap"></td>
+                  <td :class="statusClass(e.status)" x-text="e.status"></td>
+                  <td x-text="e.duration ? e.duration.toFixed(1)+'s' : '—'"></td>
+                  <td class="truncate" x-text="e.model || e.real_model || '—'" style="max-width:160px"></td>
+                  <td x-text="e.kudos ? e.kudos.toFixed(1) : '—'"></td>
+                  <td x-text="(e.input_tokens||0) + '+' + (e.output_tokens||0)"></td>
+                  <td class="truncate" x-text="preview(e)" style="max-width:220px"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <!-- Active queue -->
+        <div class="active-queue" x-show="active.length > 0">
+          <span class="kv-label">Active:</span>
+          <template x-for="(req, idx) in active" :key="idx">
+            <div class="active-item">
+              <span x-text="req.model || req.path"></span>
+              <template x-if="req.queue_pos !== null && req.queue_pos !== undefined">
+                <span class="dim" x-text="'Q:' + req.queue_pos"></span>
+              </template>
+              <template x-if="req.eta !== null && req.eta !== undefined">
+                <span class="dim" x-text="'ETA:' + req.eta + 's'"></span>
+              </template>
+              <template x-if="req.job_id">
+                <button class="btn btn-sm btn-danger"
+                  @click.stop="cancelJob(req.job_id)">✕</button>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Detail Modal -->
+      <div class="modal-overlay" x-show="detail !== null" @keydown.escape.window="detail = null" @click.self="detail = null">
+        <div class="modal" x-show="detail !== null">
+          <div class="modal-header">
+            <h3 x-text="detail ? (detail.method + ' ' + detail.path) : ''"></h3>
+            <button class="modal-close" @click="detail = null">✕</button>
+          </div>
+          <div class="modal-body" x-show="detail">
+            <!-- Request info -->
+            <div>
+              <div class="modal-section-title">Request</div>
+              <div class="kv-row"><span class="kv-label">Time</span><span x-text="detail && fmtTime(detail.timestamp)"></span></div>
+              <div class="kv-row"><span class="kv-label">Status</span><span :class="detail && statusClass(detail.status)" x-text="detail && detail.status"></span></div>
+              <div class="kv-row"><span class="kv-label">Duration</span><span x-text="detail && detail.duration ? detail.duration.toFixed(2)+'s' : '—'"></span></div>
+            </div>
+            <!-- Horde info -->
+            <div x-show="detail && (detail.model || detail.worker)">
+              <div class="modal-section-title">Horde</div>
+              <div class="kv-row"><span class="kv-label">Model (requested)</span><span x-text="detail && (detail.model || '—')"></span></div>
+              <div class="kv-row"><span class="kv-label">Real Model</span><span x-text="detail && (detail.real_model || '—')"></span></div>
+              <div class="kv-row"><span class="kv-label">Worker</span><span x-text="detail && (detail.worker || '—')"></span></div>
+              <div class="kv-row"><span class="kv-label">Worker ID</span><span class="dim" x-text="detail && (detail.worker_id || '—')"></span></div>
+              <div class="kv-row"><span class="kv-label">Kudos</span><span x-text="detail && detail.kudos ? detail.kudos.toFixed(2) : '—'"></span></div>
+              <div class="kv-row"><span class="kv-label">Job ID</span><span class="dim" x-text="detail && (detail.job_id || '—')"></span></div>
+              <div class="kv-row"><span class="kv-label">Input Tokens</span><span x-text="detail && (detail.input_tokens || 0)"></span></div>
+              <div class="kv-row"><span class="kv-label">Output Tokens</span><span x-text="detail && (detail.output_tokens || 0)"></span></div>
+            </div>
+            <!-- Error -->
+            <div x-show="detail && detail.error">
+              <div class="modal-section-title">Error</div>
+              <div class="detail-text error" x-text="detail && detail.error"></div>
+            </div>
+            <!-- Tool info -->
+            <div x-show="detail && detail.tool_info">
+              <div class="modal-section-title">Tool Calls</div>
+              <div class="detail-text" x-text="detail && detail.tool_info"></div>
+            </div>
+            <!-- Reasoning -->
+            <div x-show="detail && detail.reasoning_content">
+              <div class="modal-section-title">Reasoning</div>
+              <div class="detail-text" x-text="detail && detail.reasoning_content"></div>
+            </div>
+            <!-- Response -->
+            <div x-show="detail && detail.response_text">
+              <div class="modal-section-title">Response</div>
+              <div class="detail-text" x-text="detail && detail.response_text"></div>
+            </div>
+            <!-- Raw response -->
+            <div x-show="detail && detail.raw_response_text && detail.raw_response_text !== detail.response_text">
+              <div class="modal-section-title">Raw Response</div>
+              <div class="detail-text" x-text="detail && detail.raw_response_text"></div>
+            </div>
+            <!-- Prompt -->
+            <div x-show="detail && detail.prompt">
+              <div class="modal-section-title">Prompt</div>
+              <div class="detail-text" x-text="detail && detail.prompt"></div>
+            </div>
+            <!-- Messages -->
+            <div x-show="detail && detail.messages && detail.messages.length">
+              <div class="modal-section-title">Messages</div>
+              <div class="detail-text" x-text="detail && JSON.stringify(detail.messages, null, 2)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>

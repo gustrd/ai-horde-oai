@@ -16,6 +16,7 @@ from app.horde.client import HordeClient
 from app.horde.routing import ModelRouter
 from app.log_store import RequestLogEntry
 from app.routers import chat, completions, embeddings, models
+from app.webui.router import setup_webui_callbacks, webui_router
 
 logger = logging.getLogger("ai-horde-oai")
 
@@ -168,6 +169,11 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.include_router(completions.router)
     app.include_router(embeddings.router)
     app.include_router(models.router)
+    app.include_router(webui_router)
+    # Mount static files and wire real-time callbacks for the web UI
+    from app.webui.router import _mount_static  # noqa: PLC0415
+    _mount_static(app)
+    setup_webui_callbacks(app)
 
     @app.get("/health")
     async def health():

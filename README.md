@@ -17,11 +17,14 @@ uv sync
 ## Usage
 
 ```bash
-uv run horde-oai        # HTTP server only
-uv run horde-oai-tui    # TUI (includes embedded HTTP server)
+uv run horde-oai        # HTTP server + Web UI
+uv run horde-oai-tui    # TUI with embedded HTTP server + Web UI
 ```
 
-The server starts on `http://0.0.0.0:8000` by default. The TUI provides interactive configuration, model browsing, chat, and request logs.
+The server starts on `http://0.0.0.0:8000` by default.
+
+- **Web UI**: `http://localhost:8000/ui/` — browser-based dashboard, chat, model browser, config editor, and request logs
+- **TUI**: terminal interface with the same features, shares all backend state with the web UI
 
 ## Configuration
 
@@ -56,10 +59,26 @@ client_agent: "ai-horde-oai:0.1:github"  # must follow <name>:<version>:<contact
 
 Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`.
 
-## Endpoints
+## Web UI
+
+Open `http://localhost:8000/ui/` after starting the server. The web UI is served by the same FastAPI app and shares all backend state — no separate process needed.
+
+| Tab | Description |
+|-----|-------------|
+| **Dashboard** | Connection status, user info, kudos balance, session stats, banned models |
+| **Chat** | Interactive chat with model selector, system prompt, markdown rendering, and metadata display |
+| **Models** | Sortable/filterable model table — click a row to set it as the default and switch to Chat |
+| **Config** | Edit all settings in-browser and save to disk |
+| **Logs** | Real-time request log with detail view and active queue display |
+
+Real-time updates (new log entries, active requests) are pushed via WebSocket. The Chat tab uses a non-streaming POST and renders responses with [marked.js](https://marked.js.org/).
+
+## API Endpoints
+
+### OpenAI-Compatible
 
 | Endpoint | Method | Description |
-|---|---|---|
+|----------|--------|-------------|
 | `/v1/chat/completions` | POST | Chat completions (streaming supported) |
 | `/v1/completions` | POST | Legacy text completions |
 | `/v1/models` | GET | List available model aliases |
@@ -70,7 +89,7 @@ Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`
 Clients use short model names — real Horde model names never leave the server.
 
 | Alias | Behavior |
-|---|---|
+|-------|----------|
 | `default` | Uses `default_model` from config |
 | `best` | Auto-picks model with most workers |
 | `fast` | Auto-picks model with shortest queue |
