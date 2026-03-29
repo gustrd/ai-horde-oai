@@ -61,9 +61,10 @@ async def put_config(request: Request, body: dict):
     config: Settings = request.app.state.config
     # Merge body into current config, ignoring masked key
     current = config.model_dump()
+    masked_placeholder = _mask_key(current["horde_api_key"])
     for k, v in body.items():
-        if k == "horde_api_key" and "*" in str(v):
-            continue  # skip masked placeholder
+        if k == "horde_api_key" and v == masked_placeholder:
+            continue  # skip if it's the same masked placeholder we sent
         current[k] = v
     try:
         new_config = Settings(**current)

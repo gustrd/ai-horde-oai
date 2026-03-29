@@ -256,7 +256,7 @@
         <!-- API Settings -->
         <div class="form-section">
           <div class="form-section-title">API Settings</div>
-          <div class="field"><label>API Key</label><input type="password" x-model="cfg.horde_api_key" /></div>
+          <div class="field"><label>API Key</label><input type="password" x-model="cfg.horde_api_key" @focus="if(cfg.horde_api_key.includes('*')) cfg.horde_api_key=''" /></div>
           <div class="field"><label>Horde API URL</label><input type="text" x-model="cfg.horde_api_url" /></div>
           <div class="field"><label>Client Agent</label><input type="text" x-model="cfg.client_agent" /></div>
         </div>
