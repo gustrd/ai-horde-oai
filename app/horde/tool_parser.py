@@ -31,6 +31,11 @@ def parse_tool_call(text: str, fmt: str) -> ToolCall | None:
     if result is not None:
         return result
 
+    # Universal: ```tool_call\n{...}\n``` fenced-code-block format (Hermes/standard)
+    result = _parse_tool_call_fence(text)
+    if result is not None:
+        return result
+
     # Universal: Markdown "Action" format (Command R, Gemma, etc.)
     result = _parse_markdown_action(text)
     if result is not None:
@@ -83,6 +88,28 @@ def _parse_markdown_action(text: str) -> ToolCall | None:
         arguments = data if isinstance(data, str) else json.dumps(data)
         return ToolCall(function=ToolCallFunction(name=name, arguments=arguments))
 
+    return None
+
+
+def _parse_tool_call_fence(text: str) -> ToolCall | None:
+    """
+    Parse the ```tool_call\n{...}\n``` fenced-code-block format.
+    The fence tag may be 'tool_call' or 'json'.
+    """
+    match = re.search(
+        r"```(?:tool_call|json)\s*\n(\{.*?\})\s*\n?```",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            result = _make_tool_call(data)
+            if result is not None:
+                logger.debug("tool call: parsed ```tool_call fence format")
+            return result
+        except (json.JSONDecodeError, TypeError):
+            pass
     return None
 
 
