@@ -33,6 +33,8 @@ TOOL_CALL_HERMES_NO_CLOSE = '<tool_call>\n{"name": "get_weather", "arguments": {
 TOOL_CALL_LLAMA3 = '{"name": "get_weather", "parameters": {"city": "Paris"}}'
 TOOL_CALL_LLAMA3_PYTHON_TAG = '<|python_tag|>{"name": "get_weather", "parameters": {"city": "London"}}'
 TOOL_CALL_QWEN_BRACKET = '[TOOL_CALLS]get_weather[ARGS]{"city": "Tokyo"}'
+TOOL_CALL_FENCE = '```tool_call\n{"name": "web_search", "arguments": {"query": "Hacker News", "count": 5}}\n```'
+TOOL_CALL_FENCE_JSON = '```json\n{"name": "web_search", "arguments": {"query": "Linux", "count": 3}}\n```'
 
 # Plain JSON responses (no <tool_call> wrapper) — fallback format
 # OpenClaw channel format: <|start|>assistant<|channel|>tool {...}<|im_end|>
@@ -229,6 +231,26 @@ def test_parse_tool_call_no_match():
     """Returns None for plain text."""
     assert parse_tool_call("The weather in Paris is sunny today.", "hermes") is None
     assert parse_tool_call("Sure, let me help you.", "llama3") is None
+
+
+def test_parse_tool_call_fence():
+    """Parses ```tool_call fenced-code-block format."""
+    tc = parse_tool_call(TOOL_CALL_FENCE, "hermes")
+    assert tc is not None
+    assert tc.function.name == "web_search"
+    args = json.loads(tc.function.arguments)
+    assert args["query"] == "Hacker News"
+    assert args["count"] == 5
+
+
+def test_parse_tool_call_fence_json():
+    """Parses ```json fenced-code-block format."""
+    tc = parse_tool_call(TOOL_CALL_FENCE_JSON, "hermes")
+    assert tc is not None
+    assert tc.function.name == "web_search"
+    args = json.loads(tc.function.arguments)
+    assert args["query"] == "Linux"
+    assert args["count"] == 3
 
 
 def test_parse_tool_call_openclaw_channel():
