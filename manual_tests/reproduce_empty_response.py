@@ -44,7 +44,7 @@ from pathlib import Path
 
 import httpx
 
-PROXY_URL  = "http://127.0.0.1:8000"
+PROXY_URL  = "http://127.0.0.1:8002"
 HORDE_URL  = "https://aihorde.net/api"
 HORDE_KEY  = "qv_7xsM1mejOqx6Hs7RYdg"
 REAL_MODEL = "DavidAU/GPT-OSS-120b-NEO-High"
@@ -80,7 +80,7 @@ try:
             json={"model": "default", "messages": messages, "max_tokens": 256, "stream": False},
         )
 except httpx.ConnectError:
-    print("  ERROR: Cannot connect. Is the server running on port 8000?")
+    print("  ERROR: Cannot connect. Is the server running on port 8002?")
     sys.exit(1)
 elapsed = time.monotonic() - t0
 d = r.json() if r.status_code == 200 else {}

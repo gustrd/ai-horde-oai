@@ -2,7 +2,10 @@ services:
   ai-horde-oai:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8002:8002"
+    volumes:
+      - ./config:/root/.ai-horde-oai
     environment:
+      - HOST=0.0.0.0
       - HORDE_API_KEY=${HORDE_API_KEY}
     restart: unless-stopped

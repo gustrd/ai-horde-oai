@@ -31,7 +31,7 @@ def make_config(**overrides) -> Settings:
         horde_api_url="https://aihorde.net/api",
         default_model="aphrodite/llama-3.1-8b-instruct",
         host="127.0.0.1",
-        port=8000,
+        port=8002,
     )
     defaults.update(overrides)
     return Settings(**defaults)

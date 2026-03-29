@@ -19,7 +19,7 @@ def make_config(**overrides) -> Settings:
         horde_api_key="test-key-1234",
         horde_api_url="https://aihorde.net/api",
         host="127.0.0.1",
-        port=8000,
+        port=8002,
     )
     defaults.update(overrides)
     return Settings(**defaults)

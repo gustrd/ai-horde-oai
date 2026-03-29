@@ -14,8 +14,8 @@ from app.config import RetrySettings, Settings, load_config, save_config
 def test_default_settings():
     s = Settings()
     assert s.horde_api_key == "0000000000"
-    assert s.host == "0.0.0.0"
-    assert s.port == 8000
+    assert s.host == "127.0.0.1"
+    assert s.port == 8002
     assert s.retry.max_retries == 2
     assert s.retry.timeout_seconds == 300
     assert s.retry.rate_limit_backoff == 5.0

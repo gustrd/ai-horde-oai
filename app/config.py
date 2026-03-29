@@ -29,8 +29,8 @@ class RetrySettings(BaseModel):
 class Settings(BaseModel):
     horde_api_key: str = "0000000000"
     horde_api_url: str = "https://aihorde.net/api"
-    host: str = "0.0.0.0"
-    port: int = 8000
+    host: str = "127.0.0.1"
+    port: int = 8002
     client_agent: str = "ai-horde-oai:0.1:github"
 
     @field_validator("client_agent")

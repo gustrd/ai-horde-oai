@@ -10,6 +10,6 @@ COPY app/ app/
 
 RUN uv sync --no-dev
 
-EXPOSE 8000
+EXPOSE 8002
 
 CMD ["uv", "run", "horde-oai"]
