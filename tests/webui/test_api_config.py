@@ -38,9 +38,11 @@ async def test_put_config_saves(webui_client, webui_app, tmp_path):
 @pytest.mark.asyncio
 async def test_put_config_masked_key_ignored(webui_client, webui_app):
     """Posting a masked key should not overwrite the real key."""
+    # "test-webui-key" (length 14) -> "test" + "******" + "-key" -> "test******-key"
+    masked = "test" + "*" * (14 - 8) + "-key"
     r = await webui_client.put(
         "/ui/api/config",
-        json={"horde_api_key": "test****key"},
+        json={"horde_api_key": masked},
     )
     assert r.status_code == 200
     # Real key unchanged
