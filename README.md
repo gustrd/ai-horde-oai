@@ -21,9 +21,9 @@ uv run horde-oai        # HTTP server + Web UI
 uv run horde-oai-tui    # TUI with embedded HTTP server + Web UI
 ```
 
-The server starts on `http://0.0.0.0:8000` by default.
+The server starts on `http://127.0.0.1:8002` by default.
 
-- **Web UI**: `http://localhost:8000/ui/` — browser-based dashboard, chat, model browser, config editor, and request logs
+- **Web UI**: `http://localhost:8002/ui/` — browser-based dashboard, chat, model browser, config editor, and request logs
 - **TUI**: terminal interface with the same features, shares all backend state with the web UI
 
 ## Configuration
@@ -33,8 +33,8 @@ Create `~/.ai-horde-oai/config.yaml`:
 ```yaml
 horde_api_key: "your-key-here"   # get one at https://aihorde.net/register
 horde_api_url: "https://aihorde.net/api"
-host: "0.0.0.0"
-port: 8000
+host: "127.0.0.1"
+port: 8002
 
 default_model: "best"
 model_aliases:
@@ -61,7 +61,7 @@ Environment variable overrides: `HORDE_API_KEY`, `HORDE_API_URL`, `HOST`, `PORT`
 
 ## Web UI
 
-Open `http://localhost:8000/ui/` after starting the server. The web UI is served by the same FastAPI app and shares all backend state — no separate process needed.
+Open `http://localhost:8002/ui/` after starting the server. The web UI is served by the same FastAPI app and shares all backend state — no separate process needed.
 
 | Tab | Description |
 |-----|-------------|
