@@ -327,33 +327,73 @@ async def websocket_endpoint(ws: WebSocket):
 # Startup hook: wire callbacks and initialize request_log
 # ---------------------------------------------------------------------------
 
+
+def _serialize_active(active: list[dict]) -> list[dict]:
+    """Return a JSON-safe copy of active requests, stripping non-serializable fields.
+
+    cancel_fn is a Python coroutine/callable. Passing it to json.dumps raises
+    TypeError, which broadcast_sync swallows silently — causing zero items to
+    appear in the browser. We strip it here and only keep the display fields.
+    """
+    _KEEP = {"method", "path", "alias", "model", "max_tokens",
+             "queue_pos", "eta", "job_id", "messages"}
+    return [
+        {k: v for k, v in r.items() if k in _KEEP}
+        for r in active
+    ]
+
+
 def setup_webui_callbacks(app) -> None:
     """Called from create_app after the router is included.
 
     Hooks ws_manager broadcasts into the existing TUI callbacks so both the
-    TUI and web UI receive real-time updates.
+    TUI and web UI receive real-time updates. Also provides standalone tracking
+    for in-flight requests if the TUI is not running.
     """
-    # Initialize request_log if not set (standalone server, no TUI)
+    # Initialize state if not set (standalone server, no TUI)
     if not hasattr(app.state, "request_log"):
         app.state.request_log = load_entries()
+    if not hasattr(app.state, "active_requests"):
+        app.state.active_requests = []
 
-    # Chain log_callback
+    # Chain log_callback (Request completed)
     original_log_cb = getattr(app.state, "log_callback", None)
 
     def _log_cb(entry):
+        # STANDALONE: remove from active_requests on completion
+        active = getattr(app.state, "active_requests", [])
+        for i, r in enumerate(active):
+            if r.get("method") == entry.method and r.get("path") == entry.path:
+                active.pop(i)
+                break
+
         if original_log_cb:
             original_log_cb(entry)
         ws_manager.broadcast_sync({"type": "log_entry", "data": entry_to_dict(entry)})
+        ws_manager.broadcast_sync({"type": "active_requests", "data": _serialize_active(active)})
 
     app.state.log_callback = _log_cb
 
-    # Chain refresh_active_callback
+    # Chain start_callback (Request started)
+    original_start_cb = getattr(app.state, "start_callback", None)
+
+    def _start_cb(active_req):
+        active = getattr(app.state, "active_requests", [])
+        active.append(active_req)
+
+        if original_start_cb:
+            original_start_cb(active_req)
+        ws_manager.broadcast_sync({"type": "active_requests", "data": _serialize_active(active)})
+
+    app.state.start_callback = _start_cb
+
+    # Chain refresh_active_callback (queue position / ETA updates)
     original_active_cb = getattr(app.state, "refresh_active_callback", None)
 
     def _active_cb():
         active = getattr(app.state, "active_requests", [])
         if original_active_cb:
             original_active_cb()
-        ws_manager.broadcast_sync({"type": "active_requests", "data": active})
+        ws_manager.broadcast_sync({"type": "active_requests", "data": _serialize_active(active)})
 
     app.state.refresh_active_callback = _active_cb

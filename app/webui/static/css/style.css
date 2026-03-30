@@ -423,12 +423,56 @@ tbody tr.checked td { opacity: 0.5; }
 .active-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 11px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 2px 8px;
+  padding: 2px 10px;
+  transition: all 0.15s;
+}
+.active-item.clickable:hover {
+  background: var(--surface3);
+  border-color: var(--accent);
+  cursor: pointer;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.status-dot.warn {
+  background: var(--warning);
+}
+
+.pulsing {
+  animation: status-pulse 1.5s infinite;
+}
+@keyframes status-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.mini-chat {
+  background: var(--bg) !important;
+  border-color: var(--border) !important;
+  padding: 6px !important;
+}
+.msg-bubble.mini {
+  padding: 4px 8px;
+  font-size: 11px;
+  max-width: 95%;
+}
+
+.active-modal {
+  border-color: var(--warning);
+}
+.active-modal .modal-header h3 {
+  color: var(--warning);
 }
 
 /* ── Modal ───────────────────────────────────────────────── */

@@ -6,6 +6,7 @@ function logsTab() {
     entries: [],
     active: [],
     detail: null,
+    activeDetail: null,
 
     async init() {
       document.addEventListener('tab-activated', (e) => {
@@ -18,6 +19,11 @@ function logsTab() {
       });
       wsClient.on('active_requests', (data) => {
         this.active = Array.isArray(data) ? data : [];
+        // Sync activeDetail if currently viewing one
+        if (this.activeDetail) {
+          const updated = this.active.find(r => r.job_id === this.activeDetail.job_id);
+          this.activeDetail = updated || null;
+        }
       });
 
       await this.load();
@@ -50,8 +56,15 @@ function logsTab() {
       this.detail = this.entries[idx] || null;
     },
 
+    openActiveDetail(req) {
+      this.activeDetail = req || null;
+    },
+
     cancelJob(jobId) {
       wsClient.send({ type: 'cancel_job', job_id: jobId });
+      if (this.activeDetail && this.activeDetail.job_id === jobId) {
+        this.activeDetail = null;
+      }
     },
 
     fmtTime(ts) {

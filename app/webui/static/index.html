@@ -359,8 +359,9 @@
         <div class="active-queue" x-show="active.length > 0">
           <span class="kv-label">Active:</span>
           <template x-for="(req, idx) in active" :key="idx">
-            <div class="active-item">
-              <span x-text="req.model || req.path"></span>
+            <div class="active-item clickable" @click="openActiveDetail(req)">
+              <span class="status-dot pulsing" :class="req.queue_pos === null ? '' : 'warn'"></span>
+              <span x-text="req.model || req.alias"></span>
               <template x-if="req.queue_pos !== null && req.queue_pos !== undefined">
                 <span class="dim" x-text="'Q:' + req.queue_pos"></span>
               </template>
@@ -368,13 +369,96 @@
                 <span class="dim" x-text="'ETA:' + req.eta + 's'"></span>
               </template>
               <template x-if="req.job_id">
-                <button class="btn btn-sm btn-danger"
+                <button class="btn btn-sm btn-danger active-cancel"
                   @click.stop="cancelJob(req.job_id)">✕</button>
               </template>
             </div>
           </template>
         </div>
       </div>
+
+      <!-- Active Detail Modal — x-if prevents Alpine evaluating activeDetail.xyz when null -->
+      <template x-if="activeDetail !== null">
+        <div class="modal-overlay"
+          @keydown.escape.window="activeDetail = null"
+          @click.self="activeDetail = null">
+          <div class="modal active-modal">
+            <div class="modal-header">
+              <h3>
+                <span x-text="activeDetail.alias && activeDetail.alias !== activeDetail.model ? activeDetail.alias + ' →' : ''"></span>
+                <span x-text="activeDetail.model || activeDetail.alias || 'Active Request'"></span>
+              </h3>
+              <button class="modal-close" @click="activeDetail = null">✕</button>
+            </div>
+            <div class="modal-body">
+              <!-- Status banner -->
+              <div class="kv-row">
+                <span class="kv-label">Status</span>
+                <span class="kv-value warn" x-show="activeDetail.queue_pos !== null">
+                  In Queue — Position <strong x-text="activeDetail.queue_pos"></strong>
+                </span>
+                <span class="kv-value ok" x-show="activeDetail.queue_pos === null">
+                  <span class="status-dot pulsing" style="display:inline-block;margin-right:4px"></span>Processing…
+                </span>
+              </div>
+
+              <!-- Horde metadata -->
+              <div class="modal-section-title" style="margin-top:10px">Request Info</div>
+              <div class="kv-row">
+                <span class="kv-label">Alias</span>
+                <span class="kv-value" x-text="activeDetail.alias || '—'"></span>
+              </div>
+              <div class="kv-row">
+                <span class="kv-label">Resolved Model</span>
+                <span class="kv-value" x-text="activeDetail.model || '(resolving…)'"></span>
+              </div>
+              <div class="kv-row" x-show="activeDetail.max_tokens">
+                <span class="kv-label">Max Tokens</span>
+                <span class="kv-value" x-text="activeDetail.max_tokens"></span>
+              </div>
+              <div class="kv-row">
+                <span class="kv-label">ETA</span>
+                <span class="kv-value" x-text="activeDetail.eta !== null ? activeDetail.eta + 's' : '—'"></span>
+              </div>
+              <div class="kv-row">
+                <span class="kv-label">Job ID</span>
+                <span class="kv-value dim" x-text="activeDetail.job_id || '—'"></span>
+              </div>
+              <div class="kv-row">
+                <span class="kv-label">Endpoint</span>
+                <span class="kv-value dim" x-text="(activeDetail.method || '') + ' ' + (activeDetail.path || '')"></span>
+              </div>
+
+              <!-- Messages -->
+              <template x-if="activeDetail.messages && activeDetail.messages.length">
+                <div style="margin-top:12px">
+                  <div class="modal-section-title">Message History</div>
+                  <div class="chat-messages mini-chat" style="max-height:260px; overflow-y:auto;">
+                    <template x-for="(msg, idx) in activeDetail.messages" :key="idx">
+                      <div class="msg-bubble mini" :class="msg.role">
+                        <div class="dim" style="font-size:10px;margin-bottom:2px"
+                          x-text="msg.role ? msg.role.toUpperCase() : ''"></div>
+                        <div x-text="typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)"
+                          style="font-size:11px;white-space:pre-wrap"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Cancel -->
+              <div class="flex-center" style="margin-top:14px">
+                <template x-if="activeDetail.job_id">
+                  <button class="btn btn-danger" @click="cancelJob(activeDetail.job_id)">
+                    ✕ Cancel Job
+                  </button>
+                </template>
+                <button class="btn" @click="activeDetail = null">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
 
       <!-- Detail Modal -->
       <div class="modal-overlay" x-show="detail !== null" @keydown.escape.window="detail = null" @click.self="detail = null">
